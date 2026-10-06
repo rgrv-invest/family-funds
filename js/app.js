@@ -4,6 +4,7 @@ import {
 import {
   rupees, compact, pct, signedPct, signedRupees, tone, date, esc, fmtNav, fmtUnits,
 } from './format.js';
+import { readCas, normFolio, txnKey } from './cas.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const sidebar = $('#sidebar');
@@ -295,7 +296,7 @@ function viewFamily(s) {
   const un = unassigned(s);
   if (un.length) rows.push({ name: 'Unassigned folios', sub: `${un.length} folio${un.length === 1 ? '' : 's'}`, href: '#/unassigned', sum: summarize(holdingsOfFolios(s, un.map((f) => f.id)), s) });
   return (
-    header({ title: 'Family overview', subtitle: `${plural(s.members.length, 'member')} · ${plural(s.portfolios.length, 'portfolio')} · ${plural(s.folios.length, 'folio')}`, actions: ifEdit(`<button class="btn" data-add-member>+ Add member</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
+    header({ title: 'Family overview', subtitle: `${plural(s.members.length, 'member')} · ${plural(s.portfolios.length, 'portfolio')} · ${plural(s.folios.length, 'folio')}`, actions: ifEdit(`<button class="btn" data-add-member>+ Add member</button><button class="btn" data-import-cas>Import CAS</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
     (session.banner ? `<div class="banner">${session.banner}</div>` : '') +
     (!s.members.length && !s.folios.length ? welcome() : familyBody(s, all, rows))
   );
@@ -346,7 +347,7 @@ function viewPortfolio(s, id) {
       crumbs: [{ label: 'Family', href: '#/' }, { label: m?.name || '', href: `#/member/${p.memberId}` }],
       title: p.name,
       subtitle: `${folios.length} folio${folios.length === 1 ? '' : 's'}`,
-      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
+      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button><button class="btn" data-import-cas="${p.id}">Import CAS</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
     }) +
     kpis(sum) + breakups(sum) +
     holdingsTable(s, holdingsOfFolios(s, folios.map((f) => f.id)), sum.current) +
@@ -358,7 +359,7 @@ function viewPortfolio(s, id) {
 function viewUnassigned(s) {
   const folios = unassigned(s);
   return (
-    header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Unassigned folios', subtitle: 'Folios not in any portfolio. They still count in the family total.', actions: ifEdit(`<button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
+    header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Unassigned folios', subtitle: 'Folios not in any portfolio. They still count in the family total.', actions: ifEdit(`<button class="btn" data-import-cas>Import CAS</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
     folioCards(s, folios)
   );
 }
@@ -367,7 +368,7 @@ function welcome() {
   return `<section class="card welcome"><div class="card-b">
     <h2>Welcome to Family Funds</h2>
     <p>Start by adding each family member, then give them one or more portfolios (for example “Retirement” or “Tax saving”).
-    Then add folios with their purchases. Totals, XIRR and breakups appear as soon as there’s a holding.</p>
+    Then add folios with their purchases, or import them all from a CAS statement. Totals, XIRR and breakups appear as soon as there’s a holding.</p>
     ${ifEdit('<div class="actions"><button class="btn primary" data-add-member>+ Add first member</button></div>')}
   </div></section>`;
 }
@@ -411,7 +412,9 @@ function render() {
 }
 
 // ---------- dialogs ----------
-function openDialog({ title, body, submit = 'Save', onSubmit, onOpen }) {
+// onSubmit returns an error message to show, or a function to run after closing (e.g. open the next dialog).
+function openDialog({ title, body, submit = 'Save', onSubmit, onOpen, wide = false }) {
+  dialog.classList.toggle('wide', wide);
   dialog.innerHTML = `<form method="dialog" novalidate>
     <div class="dlg-h">${esc(title)}</div>
     <div class="dlg-b">${body}</div>
@@ -428,8 +431,8 @@ function openDialog({ title, body, submit = 'Save', onSubmit, onOpen }) {
     errEl.hidden = true;
     okBtn.disabled = true;
     try {
-      const err = await onSubmit(Object.fromEntries(new FormData(form)), form);
-      if (err) { errEl.textContent = err; errEl.hidden = false; } else dialog.close();
+      const res = await onSubmit(Object.fromEntries(new FormData(form)), form);
+      if (typeof res === 'string') { errEl.textContent = res; errEl.hidden = false; } else { dialog.close(); if (typeof res === 'function') res(); }
     } catch (ex) {
       errEl.textContent = ex.message || String(ex);
       errEl.hidden = false;
@@ -574,6 +577,123 @@ function addTxnDialog(folioId) {
   });
 }
 
+// ---------- CAS import ----------
+function importCasDialog(portfolioId) {
+  openDialog({
+    title: 'Import from CAS',
+    submit: 'Read statement',
+    body: `
+      <p class="hint" style="margin:0">Upload a <b>detailed</b> Consolidated Account Statement (PDF) from CAMS or KFintech.
+        Get one from camsonline.com, kfintech.com or mfcentral.com: choose “Detailed” and, the first time, “Since inception”.</p>
+      <label class="field">Statement (PDF)<input type="file" name="file" accept="application/pdf,.pdf" required></label>
+      <label class="field">PDF password<input type="password" name="password" autocomplete="off" placeholder="The one you set when requesting it"></label>
+      <p class="hint" style="margin:0">The PDF is read in your browser and isn’t uploaded. Only folios and transactions are saved.</p>
+      <p class="cas-status" aria-live="polite" hidden></p>`,
+    onSubmit: async (d, form) => {
+      const status = form.querySelector('.cas-status');
+      const say = (msg) => { status.hidden = false; status.textContent = msg; };
+      if (!d.file?.size) return 'Choose the statement PDF.';
+      try {
+        say('Reading the statement…');
+        const cas = await readCas(d.file, d.password);
+        const rows = await matchCas(cas, say);
+        return () => reviewCasDialog(cas, rows, portfolioId);
+      } catch (e) {
+        status.hidden = true;
+        return e.message || String(e);
+      }
+    },
+  });
+}
+
+// Match CAS schemes to scheme codes and folios to ones we already track; work out which transactions are new.
+async function matchCas(cas, say) {
+  const isins = new Map(cas.folios.flatMap((f) => f.schemes.map((x) => [x.isin, x.name])));
+  let done = 0;
+  say(`Matching ${plural(isins.size, 'scheme')}…`);
+  const codes = new Map(await Promise.all([...isins].map(async ([isin, name]) => {
+    const code = await store.schemeCodeForIsin(isin, name).catch(() => null);
+    say(`Matching schemes… ${++done} of ${isins.size}`);
+    return [isin, code];
+  })));
+  const s = store.get();
+  const byNo = new Map(s.folios.map((f) => [normFolio(f.folioNo), f]));
+  return cas.folios.map((f) => {
+    const existing = byNo.get(f.folioNo) || null;
+    const holdings = f.schemes.map((x) => {
+      const code = codes.get(x.isin);
+      const held = existing && code ? s.holdings.find((h) => h.folioId === existing.id && h.schemeCode === code) : null;
+      const have = new Set((held?.txns || []).map(txnKey));
+      return { ...x, code, isNew: !held, fresh: x.txns.filter((t) => !have.has(txnKey(t))) };
+    });
+    const ready = holdings.filter((h) => h.code && h.fresh.length);
+    // A new holding from a statement that starts part-way through has no cost for its opening units.
+    const gap = ready.some((h) => h.isNew && h.openingUnits > 0.001);
+    return { ...f, existing, holdings, ready, gap };
+  });
+}
+
+function reviewCasDialog(cas, rows, portfolioId) {
+  const s = store.get();
+  const anyNew = rows.some((r) => !r.existing && r.ready.length);
+  const casHolder = rows.find((r) => r.holder)?.holder || '';
+  const words = new Set(casHolder.toLowerCase().split(/\s+/));
+  const p = portfolioById(s, portfolioId);
+  const guess = s.members.find((m) => m.name.toLowerCase().split(/\s+/).some((w) => words.has(w)))?.name
+    || (p && memberById(s, p.memberId)?.name);
+  const txnCount = (r) => r.ready.reduce((a, h) => a + h.fresh.length, 0);
+  const schemeLine = (h) => {
+    const name = esc(h.name || h.isin);
+    if (!h.code) return `<li class="warn">${name}<small>Couldn’t match ISIN ${esc(h.isin)} to a scheme — skipped. Add it by hand with “+ Transaction”.</small></li>`;
+    const notes = [];
+    if (h.isNew && h.openingUnits > 0.001) notes.push(`${fmtUnits(h.openingUnits)} units held before ${date(cas.period?.from || h.txns[0].date)} aren’t in this statement, so invested and XIRR would be wrong. Use a “Since inception” statement.`);
+    if (!h.balanced) notes.push('Some rows couldn’t be read: the units don’t add up to the closing balance. Check this scheme after importing.');
+    const what = h.fresh.length ? `${plural(h.fresh.length, 'new transaction')}` : 'up to date';
+    return `<li class="${notes.length ? 'warn' : ''}">${name} <span class="muted">· ${what}</span>${notes.map((n) => `<small>${esc(n)}</small>`).join('')}</li>`;
+  };
+  const folioRow = (r, i) => {
+    const n = txnCount(r);
+    const tag = !n ? 'Up to date' : r.existing ? 'Already tracked' : 'New folio';
+    return `
+      <label class="cas-folio${n ? '' : ' off'}">
+        <input type="checkbox" name="f${i}" ${n && !r.gap ? 'checked' : ''} ${n ? '' : 'disabled'}>
+        <div>
+          <div class="cas-folio-h"><b>Folio ${esc(r.folioNo)}</b><span class="chip">${tag}</span>${r.holder ? `<span class="muted">${esc(r.holder)}</span>` : ''}</div>
+          <ul>${r.holdings.map(schemeLine).join('')}</ul>
+        </div>
+      </label>`;
+  };
+  const total = rows.reduce((a, r) => a + txnCount(r), 0);
+  openDialog({
+    title: 'Review import',
+    submit: total ? 'Import' : 'Done',
+    wide: true,
+    body: `
+      <p class="hint" style="margin:0">${cas.period ? `Statement ${date(cas.period.from)} – ${date(cas.period.to)} · ` : ''}${plural(rows.length, 'folio')} · ${plural(total, 'new transaction')}.
+        ${total ? 'Transactions already in the tracker are skipped, so it’s safe to import a newer statement later.' : 'Everything in this statement is already in the tracker.'}</p>
+      ${anyNew ? `<div class="row-2">
+        <label class="field">Holder for new folios<select name="holder">${s.members.map((m) => `<option ${m.name === guess ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}<option value="Other" ${guess ? '' : 'selected'}>Other</option></select></label>
+        <label class="field">Put new folios in<select name="portfolioId">${portfolioOptions(s, portfolioId)}</select></label>
+      </div>` : ''}
+      <div class="cas-list">${rows.map(folioRow).join('')}</div>`,
+    onSubmit: async (d) => {
+      if (!total) return;
+      const plan = rows.filter((r, i) => d[`f${i}`]).map((r) => ({
+        folioId: r.existing?.id || null,
+        folioNo: r.folioNo,
+        holder: d.holder || 'Other',
+        portfolioId: d.portfolioId || null,
+        holdings: r.ready.map((h) => ({ schemeCode: h.code, txns: h.fresh })),
+      }));
+      if (!plan.length) return 'Tick at least one folio to import.';
+      await store.importFolios(plan);
+      const added = plan.filter((f) => !f.folioId).length;
+      const txns = plan.reduce((a, f) => a + f.holdings.reduce((b, h) => b + h.txns.length, 0), 0);
+      toast(`Imported ${plural(txns, 'transaction')}${added ? ` · ${plural(added, 'new folio')}` : ''}`);
+    },
+  });
+}
+
 function addUserDialog() {
   openDialog({
     title: 'Add person',
@@ -613,6 +733,7 @@ document.addEventListener('click', (e) => {
     });
   }
   if (t.hasAttribute('data-add-folio')) return addFolioDialog(t.dataset.addFolio || null);
+  if (t.hasAttribute('data-import-cas')) return importCasDialog(t.dataset.importCas || null);
   if (t.dataset.addTxn) return addTxnDialog(t.dataset.addTxn);
   if (t.dataset.deleteFolio) {
     const f = s.folios.find((x) => x.id === t.dataset.deleteFolio);

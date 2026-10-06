@@ -18,6 +18,13 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 - **NAVs and scheme data** come from mfapi.in (AMFI data) in the browser: search, latest NAV,
   NAV history (used to estimate units when left blank). NAVs refresh once a day per scheme,
   triggered by whoever opens the app first.
+- **CAS import** (“Import CAS” button): editors upload a CAMS/KFintech *detailed* CAS PDF. It's opened
+  in the browser with pdf.js (loaded from jsDelivr on demand, password supported) and never uploaded.
+  Schemes are matched by ISIN to mfapi.in codes. Folios are matched by folio number, and
+  transactions already stored (same date, units and amount) are skipped, so re-importing a newer
+  statement only adds what's new. Stamp duty is added to its purchase and STT/TDS taken off the
+  redemption. The review step warns when a statement starts part-way through a holding (opening
+  units with no cost) or when the units don't add up to the closing balance.
 
 ## Files
 
@@ -29,7 +36,8 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 | `js/firebase-store.js` | Firestore-backed store (live sync, writes, NAV refresh) |
 | `js/app.js` | All UI: views, dialogs, drag-and-drop, access page |
 | `js/calc.js` | FIFO cost basis, XIRR, aggregation, breakups |
-| `js/mf.js` | mfapi.in client + AMFI category → asset class mapping |
+| `js/mf.js` | mfapi.in client + AMFI category → asset class mapping + ISIN lookup |
+| `js/cas.js` | CAS PDF reader (pdf.js) and parser → folios, schemes, transactions |
 | `js/format.js` | Indian number/date formatting |
 | `js/data.js`, `js/preview-main.js` | Sample-data store for the offline preview |
 | `build-preview.mjs` | `node build-preview.mjs` → single-file `preview.html` with sample data |
@@ -51,7 +59,3 @@ users/{email}    { role, updatedAt }
 1. Edit files; check the UI with `node build-preview.mjs` and open `preview.html`.
 2. Commit and push to `main`; GitHub Pages redeploys in about a minute.
 3. If you change `firestore.rules`, paste the new rules into the Firebase console and publish.
-
-## Planned
-
-- Import folios and transactions from a CAMS/KFintech detailed CAS (PDF).
