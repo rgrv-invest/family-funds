@@ -14,6 +14,12 @@ export function xirr(flows) {
   const npv = (r) => cf.reduce((s, c) => s + c.a / Math.pow(1 + r, c.y), 0);
   const dnpv = (r) => cf.reduce((s, c) => s - (c.y * c.a) / Math.pow(1 + r, c.y + 1), 0);
 
+  // The rate's sign must match the overall gain: npv(0) is the plain sum of the flows. A root on
+  // the other side (or a runaway one) is an artefact, e.g. of flows dated out of order.
+  const gain = npv(0);
+  if (gain === 0) return 0;
+  const plausible = (x) => isFinite(x) && x > -1 && Math.sign(x) === Math.sign(gain);
+
   let r = 0.1;
   for (let i = 0; i < 50; i++) {
     const v = npv(r);
@@ -21,18 +27,22 @@ export function xirr(flows) {
     if (!isFinite(v) || !isFinite(d) || d === 0) break;
     const next = r - v / d;
     if (next <= -0.9999 || !isFinite(next)) break;
-    if (Math.abs(next - r) < 1e-8) return next;
+    if (Math.abs(next - r) < 1e-8) { if (plausible(next)) return next; break; }
     r = next;
   }
-  // bisection fallback
-  let lo = -0.9999, hi = 10;
-  let flo = npv(lo), fhi = npv(hi);
-  if (flo * fhi > 0) return null;
+  // Bisection on the side the gain points to: (-1, 0) for a loss, (0, hi) for a gain.
+  let lo, hi;
+  if (gain < 0) { lo = -0.999999; hi = 0; } else {
+    lo = 0; hi = 1;
+    while (npv(hi) > 0 && hi < 1e12) hi *= 10;
+  }
+  let flo = npv(lo);
+  if (!isFinite(flo) || flo * npv(hi) > 0) return null;
   for (let i = 0; i < 200; i++) {
     const mid = (lo + hi) / 2;
     const fm = npv(mid);
     if (Math.abs(fm) < 1e-6) return mid;
-    if (flo * fm < 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+    if (flo * fm < 0) hi = mid; else { lo = mid; flo = fm; }
   }
   return (lo + hi) / 2;
 }
@@ -84,7 +94,10 @@ export function summarize(holdings, state) {
     byAsset[s.assetClass] = (byAsset[s.assetClass] || 0) + st.current;
     byCategory[s.category] = (byCategory[s.category] || 0) + st.current;
   }
-  const r = current > 0 ? xirr([...flows, { date: state.navDate, amount: current }]) : null;
+  // Value on the NAV date, or on the latest transaction if that's newer: NAVs are published a day
+  // or so late, and a purchase dated after the valuation would read a loss as a huge gain.
+  const valueDate = flows.reduce((m, f) => (f.date > m ? f.date : m), state.navDate);
+  const r = current > 0 ? xirr([...flows, { date: valueDate, amount: current }]) : null;
   const toList = (o) =>
     Object.entries(o)
       .map(([name, value]) => ({ name, value, pct: current ? value / current : 0 }))
