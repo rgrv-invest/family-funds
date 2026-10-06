@@ -46,6 +46,10 @@ export function holdingStats(h, scheme, navDate) {
     if (t.units > 0) {
       lots.push({ units: t.units, cost: t.amount });
     } else {
+      // A reversal (bounced cheque, rejected purchase) cancels the purchase it reverses: same units,
+      // same money back. Remove that lot instead of selling the oldest units first.
+      const r = lots.findLastIndex((l) => Math.abs(l.units + t.units) < 5e-4 && Math.abs(l.cost + t.amount) <= Math.max(1, l.cost * 1e-3));
+      if (r >= 0) { lots.splice(r, 1); continue; }
       let toSell = -t.units;
       while (toSell > 1e-9 && lots.length) {
         const lot = lots[0];

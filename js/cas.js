@@ -111,8 +111,9 @@ export function parseCas(lines) {
       if (TAX_RE.test(desc)) {
         // Stamp duty is paid on top of a purchase; STT/TDS come out of a redemption.
         // Either way the cash that left (or reached) the investor shifts by +amt.
+        // A reversed purchase has its stamp duty reversed too, printed negative: "(25.00)".
         const t = [...txns].reverse().find((x) => x.date === date);
-        if (t) t.amount = round(t.amount + Math.abs(amt), 2);
+        if (t) t.amount = round(t.amount + amt, 2);
       } else if (/div|idcw/i.test(desc) && !/reinv/i.test(desc)) {
         txns.push({ date, amount: -round(Math.abs(amt), 2), units: 0 }); // payout to the investor
       }
@@ -225,5 +226,6 @@ export async function readCas(file, password) {
   return cas;
 }
 
-// Same transaction already stored? (dates, units and amount match)
-export const txnKey = (t) => `${t.date}|${(+t.units).toFixed(3)}|${(+t.amount).toFixed(2)}`;
+// Same transaction already stored? Date and units identify it; the amount is left out so that
+// a change in how charges are folded into amounts doesn't make old rows look new.
+export const txnKey = (t) => `${t.date}|${(+t.units).toFixed(3)}`;
