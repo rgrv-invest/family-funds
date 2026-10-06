@@ -168,6 +168,10 @@ export const sampleStore = {
         : [...state.holdings, { id: id('h'), folioId, schemeCode, txns: [txn] }],
     });
   },
+  deleteFolios(ids) {
+    const set = new Set(ids);
+    commit({ folios: state.folios.filter((f) => !set.has(f.id)), holdings: state.holdings.filter((h) => !set.has(h.folioId)) });
+  },
   deleteFolio(folioId) {
     commit({ folios: state.folios.filter((f) => f.id !== folioId), holdings: state.holdings.filter((h) => h.folioId !== folioId) });
   },
