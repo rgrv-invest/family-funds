@@ -400,13 +400,26 @@ function render() {
   const r = route();
   renderSidebar(s, r);
   const y = window.scrollY;
+  const same = render.lastHash === location.hash;
+  // Folio cards from the first one on screen down, with where that first one sits.
+  const cards = same ? [...main.querySelectorAll('[data-folio]')] : [];
+  const first = cards.findIndex((el) => el.getBoundingClientRect().bottom > 0);
+  const anchorTop = first >= 0 ? cards[first].getBoundingClientRect().top : Infinity;
+  const anchorIds = anchorTop < innerHeight ? cards.slice(first).map((el) => el.dataset.folio) : [];
   main.innerHTML =
     r.type === 'member' ? viewMember(s, r.id)
     : r.type === 'portfolio' ? viewPortfolio(s, r.id)
     : r.type === 'unassigned' ? viewUnassigned(s)
     : r.type === 'access' ? viewAccess(s)
     : viewFamily(s);
-  if (render.lastHash === location.hash) window.scrollTo(0, y); else window.scrollTo(0, 0);
+  if (same) {
+    window.scrollTo(0, y);
+    // Keep the folio list still when content above it changes (e.g. moving a folio out shrinks
+    // the summary and holdings table): the first card on screen stays put, or if it was moved
+    // away, the next one takes its place.
+    const anchor = anchorIds.map((id) => main.querySelector(`[data-folio="${id}"]`)).find(Boolean);
+    if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
+  } else window.scrollTo(0, 0);
   render.lastHash = location.hash;
   closeMenu();
 }
