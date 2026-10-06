@@ -5,6 +5,10 @@ const DAY = 864e5;
 // XIRR via Newton-Raphson with bisection fallback. flows: [{ date: 'YYYY-MM-DD', amount }]
 // Sign convention: money going in to the investment is negative, money coming out positive.
 export function xirr(flows) {
+  // Net same-day flows: a purchase and its same-day reversal cancel out instead of skewing the result.
+  const byDate = new Map();
+  for (const f of flows) byDate.set(f.date, (byDate.get(f.date) || 0) + f.amount);
+  flows = [...byDate].map(([date, amount]) => ({ date, amount })).filter((f) => Math.abs(f.amount) > 0.005);
   if (flows.length < 2) return null;
   const hasNeg = flows.some((f) => f.amount < 0);
   const hasPos = flows.some((f) => f.amount > 0);
@@ -51,7 +55,8 @@ export function xirr(flows) {
 export function holdingStats(h, scheme, navDate) {
   const lots = [];
   const flows = [];
-  for (const t of [...h.txns].sort((a, b) => a.date.localeCompare(b.date))) {
+  // Same day: purchases before sales, so a reversal printed above its purchase can still cancel it.
+  for (const t of [...h.txns].sort((a, b) => a.date.localeCompare(b.date) || b.units - a.units)) {
     flows.push({ date: t.date, amount: -t.amount });
     if (t.units > 0) {
       lots.push({ units: t.units, cost: t.amount });
