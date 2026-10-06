@@ -141,6 +141,20 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       commits.push(b.commit());
       await Promise.all(commits);
     },
+    async deleteFolios(ids) {
+      const set = new Set(ids);
+      const refs = [
+        ...ids.map((id) => doc(db, 'folios', id)),
+        ...data.holdings.filter((h) => set.has(h.folioId)).map((h) => doc(db, 'holdings', h.id)),
+      ];
+      const commits = [];
+      for (let i = 0; i < refs.length; i += 450) {
+        const b = writeBatch(db);
+        refs.slice(i, i + 450).forEach((r) => b.delete(r));
+        commits.push(b.commit());
+      }
+      await Promise.all(commits);
+    },
     deleteFolio(id) {
       const b = writeBatch(db);
       b.delete(doc(db, 'folios', id));

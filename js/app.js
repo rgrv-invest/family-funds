@@ -347,7 +347,7 @@ function viewPortfolio(s, id) {
       crumbs: [{ label: 'Family', href: '#/' }, { label: m?.name || '', href: `#/member/${p.memberId}` }],
       title: p.name,
       subtitle: `${folios.length} folio${folios.length === 1 ? '' : 's'}`,
-      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button><button class="btn" data-import-cas="${p.id}">Import CAS</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
+      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button>${folios.length ? `<button class="btn danger" data-delete-all-folios="${p.id}">Delete all folios</button>` : ''}<button class="btn" data-import-cas="${p.id}">Import CAS</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
     }) +
     kpis(sum) + breakups(sum) +
     holdingsTable(s, holdingsOfFolios(s, folios.map((f) => f.id)), sum.current) +
@@ -735,6 +735,16 @@ document.addEventListener('click', (e) => {
   if (t.hasAttribute('data-add-folio')) return addFolioDialog(t.dataset.addFolio || null);
   if (t.hasAttribute('data-import-cas')) return importCasDialog(t.dataset.importCas || null);
   if (t.dataset.addTxn) return addTxnDialog(t.dataset.addTxn);
+  if (t.dataset.deleteAllFolios) {
+    const p = portfolioById(s, t.dataset.deleteAllFolios);
+    const fs = foliosOfPortfolio(s, p.id);
+    return openDialog({
+      title: `Delete all ${plural(fs.length, 'folio')} in “${p.name}”?`, submit: `Delete ${plural(fs.length, 'folio')}`,
+      body: `<p style="margin:0;color:var(--ink-2)">This permanently removes ${fs.length === 1 ? 'this folio' : `these ${fs.length} folios`} and all their transactions for everyone. The portfolio itself stays. To keep folios but take them out of this portfolio, use “Delete” on the portfolio instead — its folios move to Unassigned.</p>
+        <p class="hint" style="margin:0">${fs.map((f) => `${esc(f.folioNo)} · ${esc(f.amc)}`).join('<br>')}</p>`,
+      onSubmit: async () => { await store.deleteFolios(fs.map((f) => f.id)); toast(`Deleted ${plural(fs.length, 'folio')} from ${p.name}`); },
+    });
+  }
   if (t.dataset.deleteFolio) {
     const f = s.folios.find((x) => x.id === t.dataset.deleteFolio);
     return openDialog({
