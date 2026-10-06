@@ -1,6 +1,6 @@
 // Inlines CSS + JS modules into one self-contained preview.html with sample data (no Firebase).
 import { readFileSync, writeFileSync } from 'fs';
-const order = ['js/format.js', 'js/data.js', 'js/calc.js', 'js/app.js', 'js/preview-main.js'];
+const order = ['js/format.js', 'js/data.js', 'js/calc.js', 'js/cas.js', 'js/app.js', 'js/preview-main.js'];
 const strip = (src) => src
   .replace(/^import[\s\S]*?from\s+['"][^'"]+['"];?\s*$/gm, '')
   .replace(/^export\s+(const|function|let|class|async function)/gm, '$1');

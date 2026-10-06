@@ -178,6 +178,29 @@ export const sampleStore = {
   async removeUser(email) {
     commit({ users: state.users.filter((u) => u.id !== email) });
   },
+  // CAS import: the sample has no ISINs, so match on the first words of the scheme name.
+  schemeCodeForIsin: async (isin, name) => {
+    const n = name.toLowerCase();
+    return SCHEMES.find((s) => s.name.toLowerCase().split(' ').slice(0, 2).every((w) => n.includes(w)))?.code || null;
+  },
+  importFolios(plan) {
+    let { folios, holdings } = state;
+    for (const f of plan) {
+      let fid = f.folioId;
+      if (!fid) {
+        fid = id('f');
+        const amc = SCHEMES.find((s) => s.code === f.holdings[0].schemeCode).amc;
+        folios = [...folios, { id: fid, folioNo: f.folioNo, amc, holder: f.holder, portfolioId: f.portfolioId }];
+      }
+      for (const h of f.holdings) {
+        const have = holdings.find((x) => x.folioId === fid && x.schemeCode === h.schemeCode);
+        holdings = have
+          ? holdings.map((x) => (x === have ? { ...x, txns: [...x.txns, ...h.txns] } : x))
+          : [...holdings, { id: id('h'), folioId: fid, schemeCode: h.schemeCode, txns: h.txns }];
+      }
+    }
+    commit({ folios, holdings });
+  },
   addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units }) {
     const f = { id: id('f'), folioNo, amc, holder, portfolioId };
     const h = { id: id('h'), folioId: f.id, schemeCode, txns: [{ date, amount, units }] };

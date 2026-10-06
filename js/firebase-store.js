@@ -2,7 +2,7 @@
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, arrayUnion,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { fetchScheme, searchSchemes, navOn } from './mf.js';
+import { fetchScheme, searchSchemes, navOn, schemeCodeForIsin } from './mf.js';
 
 const COLS = ['members', 'portfolios', 'folios', 'holdings', 'schemes'];
 const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || String(a.name || a.folioNo || '').localeCompare(String(b.name || b.folioNo || ''));
@@ -79,6 +79,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     searchSchemes,
     ensureScheme,
     navOn,
+    schemeCodeForIsin: async (isin, name) => data.schemes.find((s) => s.isin === isin)?.code || schemeCodeForIsin(isin, name),
 
     addMember(name) {
       const id = newId('members');
@@ -116,6 +117,29 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       const h = data.holdings.find((x) => x.folioId === folioId && x.schemeCode === schemeCode);
       if (h) await updateDoc(doc(db, 'holdings', h.id), { txns: arrayUnion(txn) });
       else await setDoc(doc(db, 'holdings', newId('holdings')), { folioId, schemeCode, txns: [txn] });
+    },
+    // CAS import. plan: [{ folioId (existing) | folioNo, holder, portfolioId, holdings: [{ schemeCode, txns }] }]
+    async importFolios(plan) {
+      const codes = [...new Set(plan.flatMap((f) => f.holdings.map((h) => h.schemeCode)))];
+      const schemes = Object.fromEntries(await Promise.all(codes.map(async (c) => [c, await ensureScheme(c)])));
+      const commits = [];
+      let b = writeBatch(db), n = 0;
+      const op = (fn) => { fn(b); if (++n >= 450) { commits.push(b.commit()); b = writeBatch(db); n = 0; } };
+      plan.forEach((f, i) => {
+        let fid = f.folioId;
+        if (!fid) {
+          fid = newId('folios');
+          const amc = schemes[f.holdings[0].schemeCode].amc;
+          op((w) => w.set(doc(db, 'folios', fid), { folioNo: f.folioNo, amc, holder: f.holder, portfolioId: f.portfolioId, order: Date.now() + i }));
+        }
+        for (const h of f.holdings) {
+          const have = data.holdings.find((x) => x.folioId === fid && x.schemeCode === h.schemeCode);
+          if (have) op((w) => w.update(doc(db, 'holdings', have.id), { txns: arrayUnion(...h.txns) }));
+          else op((w) => w.set(doc(db, 'holdings', newId('holdings')), { folioId: fid, schemeCode: h.schemeCode, txns: h.txns }));
+        }
+      });
+      commits.push(b.commit());
+      await Promise.all(commits);
     },
     deleteFolio(id) {
       const b = writeBatch(db);

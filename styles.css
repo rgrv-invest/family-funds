@@ -318,3 +318,15 @@ table.access select { border: 1px solid var(--line-strong); background: var(--su
 .roles-help { margin-top: 14px; font-size: 13px; color: var(--ink-2); }
 .roles-help p { margin: 4px 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* CAS import */
+dialog.wide { width: min(640px, calc(100vw - 32px)); }
+.cas-status { margin: 0; font-size: 13px; color: var(--accent); }
+.cas-list { display: grid; gap: 8px; max-height: min(52vh, 460px); overflow-y: auto; }
+.cas-folio { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.cas-folio.off { opacity: 0.6; cursor: default; }
+.cas-folio input { margin-top: 3px; }
+.cas-folio-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.cas-folio ul { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
+.cas-folio li small { display: block; color: var(--muted); }
+.cas-folio li.warn small { color: var(--down); }

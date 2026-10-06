@@ -65,3 +65,29 @@ export async function navOn(code, isoDay) {
   }
   return null;
 }
+
+// Find the mfapi.in scheme code for an ISIN (from a CAS). The full scheme list carries ISINs;
+// if it doesn't have this one, search by name and check each candidate's ISINs.
+let allSchemes = null;
+const metaCache = new Map();
+const isinsOf = (code) => {
+  if (!metaCache.has(code)) metaCache.set(code, json(`${API}/${code}/latest`).then((d) => [d.meta?.isin_growth, d.meta?.isin_div_reinvestment]).catch(() => []));
+  return metaCache.get(code);
+};
+export async function schemeCodeForIsin(isin, name = '') {
+  try {
+    allSchemes ||= json(API);
+    const hit = (await allSchemes).find((r) => r.isinGrowth === isin || r.isinDivReinvestment === isin);
+    if (hit) return String(hit.schemeCode);
+  } catch { allSchemes = null; }
+  const words = name.replace(/\(.*?\)/g, ' ').replace(/[^A-Za-z0-9& ]/g, ' ').split(/\s+/).filter(Boolean);
+  for (const n of [6, 4, 3]) {
+    if (words.length < 2) break;
+    const rows = await searchSchemes(words.slice(0, n).join(' ')).catch(() => []);
+    const top = rows.slice(0, 15);
+    const isins = await Promise.all(top.map((r) => isinsOf(r.code)));
+    const i = isins.findIndex((x) => x.includes(isin));
+    if (i >= 0) return top[i].code;
+  }
+  return null;
+}
