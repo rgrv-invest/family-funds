@@ -1,0 +1,49 @@
+rules_version = '2';
+
+// Family Funds access rules.
+// Only people listed in the `users` collection (plus the owner) can read or change anything.
+// Roles: viewer (read only), editor (read + change portfolios), admin (editor + manage access).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function email() {
+      return request.auth.token.email.lower();
+    }
+    function isOwner() {
+      return signedIn() && email() == 'rgrv.kedia.invest@gmail.com';
+    }
+    function role() {
+      return get(/databases/$(database)/documents/users/$(email())).data.role;
+    }
+    function listed() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(email()));
+    }
+    function canRead()  { return isOwner() || (listed() && role() in ['viewer', 'editor', 'admin']); }
+    function canEdit()  { return isOwner() || (listed() && role() in ['editor', 'admin']); }
+    function isAdmin()  { return isOwner() || (listed() && role() == 'admin'); }
+
+    // Access list: admins manage it; everyone can see their own entry.
+    match /users/{userEmail} {
+      allow read: if isAdmin() || (signedIn() && userEmail == email());
+      allow create, update: if isAdmin()
+        && userEmail == userEmail.lower()
+        && request.resource.data.role in ['viewer', 'editor', 'admin'];
+      allow delete: if isAdmin();
+    }
+
+    // Family data.
+    match /{col}/{id} {
+      allow read: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes'] && canRead();
+      allow write: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes'] && canEdit();
+    }
+
+    // Anyone with read access may refresh the stored NAV of a scheme (no other fields).
+    match /schemes/{code} {
+      allow update: if canRead()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nav', 'navDate', 'checkedOn']);
+    }
+  }
+}
