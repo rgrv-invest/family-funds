@@ -51,20 +51,24 @@ export function xirr(flows) {
   return (lo + hi) / 2;
 }
 
-// Stats for one holding: units held, FIFO cost of units held, current value, cash flows.
+// Stats for one holding: units held, FIFO cost of units held, current value, cash flows,
+// and the date of the last purchase that wasn't reversed.
 export function holdingStats(h, scheme, navDate) {
   const lots = [];
+  const buys = [];
   const flows = [];
   // Same day: purchases before sales, so a reversal printed above its purchase can still cancel it.
   for (const t of [...h.txns].sort((a, b) => a.date.localeCompare(b.date) || b.units - a.units)) {
     flows.push({ date: t.date, amount: -t.amount });
     if (t.units > 0) {
-      lots.push({ units: t.units, cost: t.amount });
+      const lot = { units: t.units, cost: t.amount, date: t.date };
+      lots.push(lot);
+      buys.push(lot);
     } else {
       // A reversal (bounced cheque, rejected purchase) cancels the purchase it reverses: same units,
       // same money back. Remove that lot instead of selling the oldest units first.
       const r = lots.findLastIndex((l) => Math.abs(l.units + t.units) < 5e-4 && Math.abs(l.cost + t.amount) <= Math.max(1, l.cost * 1e-3));
-      if (r >= 0) { lots.splice(r, 1); continue; }
+      if (r >= 0) { lots[r].reversed = true; lots.splice(r, 1); continue; }
       let toSell = -t.units;
       while (toSell > 1e-9 && lots.length) {
         const lot = lots[0];
@@ -80,7 +84,8 @@ export function holdingStats(h, scheme, navDate) {
   const units = lots.reduce((s, l) => s + l.units, 0);
   const invested = lots.reduce((s, l) => s + l.cost, 0);
   const current = units * scheme.nav;
-  return { units, invested, current, flows, navDate };
+  const lastBuy = buys.reduce((m, b) => (!b.reversed && b.date > m ? b.date : m), '') || null;
+  return { units, invested, current, flows, navDate, lastBuy };
 }
 
 // Aggregate a list of holdings into totals, XIRR and breakups.

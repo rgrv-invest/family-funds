@@ -230,6 +230,10 @@ function folioCards(s, folios, { showPortfolio = false } = {}) {
     const hs = s.holdings.filter((h) => h.folioId === f.id);
     const sum = summarize(hs, s);
     const p = portfolioById(s, f.portfolioId);
+    const lastBuy = hs.reduce((m, h) => {
+      const d = holdingStats(h, schemeBy[h.schemeCode] || { nav: 0 }, s.navDate).lastBuy;
+      return d && d > m ? d : m;
+    }, '');
     return `
     <article class="folio" draggable="${canEdit()}" data-folio="${f.id}">
       ${canEdit() ? '<span class="grip" aria-hidden="true">⋮⋮</span>' : '<span></span>'}
@@ -238,6 +242,7 @@ function folioCards(s, folios, { showPortfolio = false } = {}) {
           <span class="folio-no">Folio ${esc(f.folioNo)}</span>
           <span class="chip">${esc(f.amc)}</span>
           <span class="chip">Holder: ${esc(f.holder)}</span>
+          ${lastBuy ? `<span class="chip">Last purchase: ${date(lastBuy)}</span>` : ''}
           ${showPortfolio ? `<span class="chip">${p ? esc(p.name) : 'Unassigned'}</span>` : ''}
           <span class="muted" style="font-size:12.5px">${rupees(sum.current)} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
         </div>
