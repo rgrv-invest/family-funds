@@ -53,7 +53,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   const newId = (col) => doc(collection(db, col)).id;
 
   // Pull the latest NAV for every scheme that doesn't have today's yet (see needsNav). Runs on
-  // load, when the tab comes back into view, and every 30 minutes while it's open.
+  // load, when the tab comes back into view, and every hour while it's open.
   let refreshing = false;
   async function refreshNavs() {
     if (refreshing) return;
@@ -70,7 +70,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     refreshing = false;
   }
   document.addEventListener('visibilitychange', () => { if (state && document.visibilityState === 'visible') refreshNavs(); });
-  setInterval(() => { if (state) refreshNavs(); }, 30 * 60e3);
+  setInterval(() => { if (state) refreshNavs(); }, 60 * 60e3);
 
   async function ensureScheme(code) {
     const have = data.schemes.find((s) => s.code === code);

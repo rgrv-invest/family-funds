@@ -698,7 +698,20 @@ async function matchCas(cas, say) {
       const code = codes.get(x.isin);
       const held = existing && code ? s.holdings.find((h) => h.folioId === existing.id && h.schemeCode === code) : null;
       const have = new Set((held?.txns || []).map(txnKey));
-      return { ...x, code, isNew: !held, fresh: x.txns.filter((t) => !have.has(txnKey(t))) };
+      const fresh = x.txns.filter((t) => !have.has(txnKey(t)));
+      // Statement check: what the tracker will hold after this import vs the statement's closing
+      // units and Total Cost Value (cost of the units held, stamp duty included).
+      let check = null;
+      if (code && x.closingUnits != null) {
+        const after = [...(held?.txns || []), ...fresh];
+        const st = after.length ? holdingStats({ txns: after }, { nav: 0 }, s.navDate) : { units: 0, invested: 0 };
+        check = {
+          units: st.units, invested: st.invested, afterImport: fresh.length > 0,
+          unitsOk: Math.abs(st.units - x.closingUnits) < 0.002,
+          costOk: x.costValue == null || Math.abs(st.invested - x.costValue) <= Math.max(2, x.costValue * 0.001),
+        };
+      }
+      return { ...x, code, isNew: !held, fresh, check };
     });
     const ready = holdings.filter((h) => h.code && h.fresh.length);
     // A new holding from a statement that starts part-way through has no cost for its opening units.
@@ -720,14 +733,21 @@ function reviewCasDialog(cas, rows, portfolioId) {
     const name = esc(h.name || h.isin);
     if (!h.code) return `<li class="warn">${name}<small>Couldn’t match ISIN ${esc(h.isin)} to a scheme — skipped. Add it by hand with “+ Transaction”.</small></li>`;
     const notes = [];
-    if (h.isNew && h.openingUnits > 0.001) notes.push(`${fmtUnits(h.openingUnits)} units held before ${date(cas.period?.from || h.txns[0].date)} aren’t in this statement, so invested and XIRR would be wrong. Use a “Since inception” statement.`);
+    if (h.isNew && h.openingUnits > 0.001) notes.push(`${fmtUnits(h.openingUnits)} units held before ${cas.period?.from || h.txns[0] ? date(cas.period?.from || h.txns[0].date) : 'this statement'} aren’t in this statement, so invested and XIRR would be wrong. Use a “Since inception” statement.`);
     if (!h.balanced) notes.push('Some rows couldn’t be read: the units don’t add up to the closing balance. Check this scheme after importing.');
-    const what = h.fresh.length ? `${plural(h.fresh.length, 'new transaction')}` : 'up to date';
-    return `<li class="${notes.length ? 'warn' : ''}">${name} <span class="muted">· ${what}</span>${notes.map((n) => `<small>${esc(n)}</small>`).join('')}</li>`;
+    const c = h.check;
+    const ours = c && `${fmtUnits(c.units)} units · ${rupees(c.invested)}`;
+    const theirs = c && `${fmtUnits(h.closingUnits)} units${h.costValue != null ? ` · ${rupees(h.costValue)}` : ''}`;
+    if (c && !(c.unitsOk && c.costOk)) {
+      notes.push(`Doesn’t match the statement${c.unitsOk ? ' (units match, cost differs)' : ''}. ${c.afterImport ? 'After this import the tracker would show' : 'The tracker shows'} ${ours}; the statement says ${theirs}.`);
+    }
+    const ok = c && c.unitsOk && c.costOk ? `<small class="ok">✓ Matches the statement: ${esc(theirs)}</small>` : '';
+    const what = h.fresh.length ? `${plural(h.fresh.length, 'new transaction')}` : h.txns.length ? 'up to date' : 'no transactions in this statement';
+    return `<li class="${notes.length ? 'warn' : ''}">${name} <span class="muted">· ${what}</span>${ok}${notes.map((n) => `<small>${esc(n)}</small>`).join('')}</li>`;
   };
   const folioRow = (r, i) => {
     const n = txnCount(r);
-    const tag = !n ? 'Up to date' : r.existing ? 'Already tracked' : 'New folio';
+    const tag = !n ? (r.existing ? 'Up to date' : 'Not in tracker') : r.existing ? 'Already tracked' : 'New folio';
     return `
       <label class="cas-folio${n ? '' : ' off'}">
         <input type="checkbox" name="f${i}" ${n && !r.gap ? 'checked' : ''} ${n ? '' : 'disabled'}>
@@ -738,6 +758,11 @@ function reviewCasDialog(cas, rows, portfolioId) {
       </label>`;
   };
   const total = rows.reduce((a, r) => a + txnCount(r), 0);
+  const checked = rows.flatMap((r) => r.holdings.filter((h) => h.check));
+  const off = checked.filter((h) => !(h.check.unitsOk && h.check.costOk)).length;
+  const checkLine = !checked.length ? ''
+    : off ? `<p class="cas-check warn"><b>Statement check:</b> ${off} of ${plural(checked.length, 'scheme')} won’t match the statement’s units and cost — marked below.</p>`
+    : `<p class="cas-check ok"><b>Statement check:</b> all ${plural(checked.length, 'scheme')} will match the statement’s units and cost.</p>`;
   openDialog({
     title: 'Review import',
     submit: total ? 'Import' : 'Done',
@@ -749,6 +774,7 @@ function reviewCasDialog(cas, rows, portfolioId) {
         <label class="field">Holder for new folios<select name="holder">${s.members.map((m) => `<option ${m.name === guess ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}<option value="Other" ${guess ? '' : 'selected'}>Other</option></select></label>
         <label class="field">Put new folios in<select name="portfolioId">${portfolioOptions(s, portfolioId)}</select></label>
       </div>` : ''}
+      ${checkLine}
       <div class="cas-list">${rows.map(folioRow).join('')}</div>`,
     onSubmit: async (d) => {
       if (!total) return;

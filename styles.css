@@ -324,7 +324,8 @@ dialog.wide { width: min(640px, calc(100vw - 32px)); }
 .cas-status { margin: 0; font-size: 13px; color: var(--accent); }
 .cas-list { display: grid; gap: 8px; max-height: min(52vh, 460px); overflow-y: auto; }
 .cas-folio { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
-.cas-folio.off { opacity: 0.6; cursor: default; }
+.cas-folio.off { cursor: default; }
+.cas-folio.off .cas-folio-h, .cas-folio.off input { opacity: 0.6; }
 .cas-folio input { margin-top: 3px; }
 .cas-folio-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
 .cas-folio ul { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
@@ -340,3 +341,7 @@ dialog.wide { width: min(640px, calc(100vw - 32px)); }
   .sort-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
   .sort-select select { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
 }
+.cas-folio li small.ok { color: var(--up); }
+.cas-check { margin: 0; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.cas-check.ok { color: var(--up); }
+.cas-check.warn { color: var(--down); }
