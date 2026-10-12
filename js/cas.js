@@ -65,6 +65,7 @@ const ISIN_RE = /ISIN\s*:\s*(IN[A-Z0-9]{10})/i;
 const BARE_ISIN_RE = /\b(INF[A-Z0-9]{9})\b/;
 const OPEN_RE = /Opening\s+Unit\s+Balance\s*:?\s*(\(?[\d,]+\.\d+\)?)/i;
 const CLOSE_RE = /Closing\s+Unit\s+Balance\s*:?\s*(\(?[\d,]+\.\d+\)?)/i;
+const COST_RE = /Total\s+Cost\s+Value\s*:?\s*(\(?[\d,]+\.\d+\)?)/i;
 const PERIOD_RE = /(\d{2}-[A-Za-z]{3}-\d{4})\s+To\s+(\d{2}-[A-Za-z]{3}-\d{4})/i;
 const SCHEME_START_RE = /^[A-Z0-9]{1,12}-\S/;
 const HOLDER_RE = /^[A-Z][A-Za-z .'&-]{1,60}$/;
@@ -75,6 +76,9 @@ function splitNums(rest) {
   const toks = rest.split(' ');
   const nums = [];
   while (toks.length && NUM.test(toks[toks.length - 1])) nums.unshift(toks.pop());
+  // A long description can run into the amount with no gap: "…Collection(499,975.00)".
+  const glued = nums.length && toks.length && toks[toks.length - 1].match(/^(.*[A-Za-z)])(\(?[\d,]+\.\d{2,}\)?)$/);
+  if (glued) { toks[toks.length - 1] = glued[1]; nums.unshift(glued[2]); }
   return { desc: toks.join(' '), nums };
 }
 
@@ -168,7 +172,7 @@ export function parseCas(lines) {
         if (im) i++;
       }
       if (im) {
-        scheme = { isin: im[1].toUpperCase(), name: schemeName(header), open: 0, close: null, unitSum: 0, skipped: 0, txns: [] };
+        scheme = { isin: im[1].toUpperCase(), name: schemeName(header), open: 0, close: null, cost: null, unitSum: 0, skipped: 0, txns: [] };
         folio.schemes.push(scheme);
         continue;
       }
@@ -177,8 +181,12 @@ export function parseCas(lines) {
 
     const om = line.match(OPEN_RE);
     if (om) { flushPending(); scheme.open = casNum(om[1]); continue; }
+    // "Closing Unit Balance: … Total Cost Value: …" (the cost can also wrap onto its own line)
+    const km = line.match(COST_RE);
+    if (km) scheme.cost = casNum(km[1]);
     const cm = line.match(CLOSE_RE);
     if (cm) { flushPending(); scheme.close = casNum(cm[1]); continue; }
+    if (km) continue;
 
     const dm = line.match(DATE_RE);
     if (dm) {
@@ -207,9 +215,10 @@ export function parseCas(lines) {
         txns: s.txns,
         openingUnits: s.open,
         closingUnits: s.close,
+        costValue: s.cost,
         // Opening balance + every transaction should land on the closing balance.
         balanced: s.close == null || (s.skipped === 0 && Math.abs(s.open + s.unitSum - s.close) < 0.01),
-      })).filter((s) => s.txns.length),
+      })).filter((s) => s.txns.length || s.closingUnits > 0), // still held but no transactions in this period: kept for the statement check
     }))
     .filter((f) => f.schemes.length);
   return { period, folios: out };

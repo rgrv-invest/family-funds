@@ -54,6 +54,16 @@ export async function fetchScheme(code) {
   };
 }
 
+// Does this scheme's stored NAV need checking? AMFI publishes each day's NAVs that evening (IST),
+// so until a scheme has today's NAV it's re-checked, at most every 3 hours.
+// checkedOn holds the time of the last check (older entries hold just a date).
+export const istToday = (now = Date.now()) => new Date(now + 5.5 * 3600e3).toISOString().slice(0, 10);
+export function needsNav(s, now = Date.now()) {
+  if (s.navDate && s.navDate >= istToday(now)) return false;
+  const last = Date.parse(s.checkedOn || '');
+  return !(now - last < 3 * 3600e3);
+}
+
 // NAV on (or the last trading day before) a given date, for estimating units.
 const historyCache = new Map();
 export async function navOn(code, isoDay) {

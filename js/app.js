@@ -199,13 +199,49 @@ function moveSelect(s, f) {
   return `<select data-move="${f.id}" aria-label="Move folio ${esc(f.folioNo)} to portfolio">${opts}</select>`;
 }
 
+// ---------- sorting ----------
+// Holdings table and folio list sort by column. Clicking a header sorts (largest first, or A–Z for
+// names), clicking again reverses, and a third click goes back to the default order.
+// The choice is remembered on this device only.
+const sorts = { holdings: null, folios: null }; // { key, dir: 1 | -1 }
+try { Object.assign(sorts, JSON.parse(localStorage.getItem('sort')) || {}); } catch {}
+function setSort(list, sort) {
+  sorts[list] = sort;
+  try { localStorage.setItem('sort', JSON.stringify(sorts)); } catch {}
+}
+function cycleSort(list, key) {
+  const cur = sorts[list];
+  const first = key === 'name' ? 1 : -1;
+  setSort(list, cur?.key !== key ? { key, dir: first } : cur.dir === first ? { key, dir: -first } : null);
+}
+// Sort by a value getter; missing values (no XIRR yet, say) always go last.
+function sortBy(items, sort, get) {
+  if (!sort) return items;
+  return items.map((x) => [x, get(x, sort.key)]).sort(([, a], [, b]) => {
+    if (a == null || Number.isNaN(a)) return b == null || Number.isNaN(b) ? 0 : 1;
+    if (b == null || Number.isNaN(b)) return -1;
+    return (typeof a === 'string' ? a.localeCompare(b) : a - b) * sort.dir;
+  }).map(([x]) => x);
+}
+function sortHead(list, key, label) {
+  const s = sorts[list];
+  const on = s?.key === key;
+  const state = on ? (s.dir > 0 ? 'ascending' : 'descending') : 'not sorted';
+  return `<button class="sort${on ? ' on' : ''}" data-sort="${list}:${key}" title="Sort by ${label}" aria-label="${label}, ${state}">${label}<i aria-hidden="true">${on ? (s.dir > 0 ? '▲' : '▼') : ''}</i></button>`;
+}
+const HOLDING_SORT = {
+  name: (r) => r.scheme.name, units: (r) => r.units, nav: (r) => r.scheme.nav, invested: (r) => r.sum.invested,
+  current: (r) => r.sum.current, xirr: (r) => r.sum.xirr, gain: (r) => r.sum.gain, share: (r) => r.sum.current,
+};
+
 function holdingsTable(s, holdings, total) {
-  const rows = schemeSummary(holdings, s);
+  const rows = sortBy(schemeSummary(holdings, s), sorts.holdings, (r, k) => HOLDING_SORT[k]?.(r));
   if (!rows.length) return '';
   return `
   <div class="section-title"><h2>Holdings</h2><span class="muted" style="font-size:12.5px">${rows.length} scheme${rows.length === 1 ? '' : 's'}, combined across folios</span></div>
   <div class="card table-wrap"><table class="holdings">
-    <thead><tr><th>Scheme</th><th>Units</th><th>NAV</th><th>Invested</th><th>Current value</th><th>XIRR</th><th>Gain</th><th>Share</th></tr></thead>
+    <thead><tr>${[['name', 'Scheme'], ['units', 'Units'], ['nav', 'NAV'], ['invested', 'Invested'], ['current', 'Current value'], ['xirr', 'XIRR'], ['gain', 'Gain'], ['share', 'Share']]
+      .map(([k, l]) => `<th${sorts.holdings?.key === k ? ` aria-sort="${sorts.holdings.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${sortHead('holdings', k, l)}</th>`).join('')}</tr></thead>
     <tbody>
       ${rows.map((r) => `
         <tr>
@@ -226,12 +262,32 @@ function holdingsTable(s, holdings, total) {
 function folioCards(s, folios, { showPortfolio = false } = {}) {
   if (!folios.length) return `<div class="card"><div class="card-b empty">${canEdit() ? 'No folios here yet. Add one, drag one onto this portfolio in the sidebar, or use “Move to” on any folio.' : 'No folios here yet.'}</div></div>`;
   const schemeBy = Object.fromEntries(s.schemes.map((x) => [x.code, x]));
-  return `<div class="folio-list">${folios.map((f) => {
+  const sort = sorts.folios;
+  // Each column sorts the folios by their totals, and the schemes inside each folio by their own values.
+  const gainPct = (inv, cur) => (inv ? (cur - inv) / inv : null);
+  const SCHEME_SORT = { name: (x) => x.sc?.name, units: (x) => x.st?.units, invested: (x) => x.st?.invested, current: (x) => x.st?.current, gain: (x) => x.st && gainPct(x.st.invested, x.st.current) };
+  const cards = folios.map((f) => {
     const hs = s.holdings.filter((h) => h.folioId === f.id);
+    const items = hs.map((h) => {
+      const sc = schemeBy[h.schemeCode];
+      return { h, sc, st: sc ? holdingStats(h, sc, s.navDate) : null };
+    });
     const sum = summarize(hs, s);
+    return { f, hs, sum, items: sortBy(items, sort, (x, k) => SCHEME_SORT[k]?.(x)) };
+  });
+  const FOLIO_SORT = {
+    name: (c) => c.items.map((x) => x.sc?.name || '').sort()[0],
+    units: (c) => c.items.reduce((a, x) => a + (x.st?.units || 0), 0),
+    invested: (c) => c.sum.invested, current: (c) => c.sum.current, gain: (c) => gainPct(c.sum.invested, c.sum.current),
+  };
+  const sortOpts = [['', 'Default order'], ['name:1', 'Scheme, A–Z'], ['name:-1', 'Scheme, Z–A'],
+    ...[['invested', 'Invested'], ['current', 'Current value'], ['gain', 'Gain']].flatMap(([k, l]) => [[`${k}:-1`, `${l}, high to low`], [`${k}:1`, `${l}, low to high`]])];
+  const sel = sort ? `${sort.key}:${sort.dir}` : '';
+  return `<label class="sort-select">Sort folios<select data-sort-select="folios">${sortOpts.map(([v, l]) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+  <div class="folio-list">${sortBy(cards, sort, (c, k) => FOLIO_SORT[k]?.(c)).map(({ f, sum, items }) => {
     const p = portfolioById(s, f.portfolioId);
-    const lastBuy = hs.reduce((m, h) => {
-      const d = holdingStats(h, schemeBy[h.schemeCode] || { nav: 0 }, s.navDate).lastBuy;
+    const lastBuy = items.reduce((m, x) => {
+      const d = (x.st || holdingStats(x.h, { nav: 0 }, s.navDate)).lastBuy;
       return d && d > m ? d : m;
     }, '');
     return `
@@ -247,11 +303,9 @@ function folioCards(s, folios, { showPortfolio = false } = {}) {
           <span class="muted" style="font-size:12.5px">${rupees(sum.current)} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
         </div>
         <div class="schemes">
-          <div class="scheme scheme-head"><span class="sn">Scheme</span><span>Units</span><span>Invested</span><span>Current</span><span>Gain</span></div>
-          ${hs.map((h) => {
-            const sc = schemeBy[h.schemeCode];
+          <div class="scheme scheme-head"><span class="sn">${sortHead('folios', 'name', 'Scheme')}</span><span>${sortHead('folios', 'units', 'Units')}</span><span>${sortHead('folios', 'invested', 'Invested')}</span><span>${sortHead('folios', 'current', 'Current')}</span><span>${sortHead('folios', 'gain', 'Gain')}</span></div>
+          ${items.map(({ h, sc, st }) => {
             if (!sc) return `<div class="scheme"><span class="sn muted">Loading scheme ${esc(h.schemeCode)}…</span></div>`;
-            const st = holdingStats(h, sc, s.navDate);
             const g = st.current - st.invested;
             return `<div class="scheme">
               <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · NAV ${fmtNav(sc.nav)}</small></span>
@@ -406,8 +460,10 @@ function render() {
   renderSidebar(s, r);
   const y = window.scrollY;
   const same = render.lastHash === location.hash;
+  const resorted = render.resorted;
+  render.resorted = false;
   // Folio cards from the first one on screen down, with where that first one sits.
-  const cards = same ? [...main.querySelectorAll('[data-folio]')] : [];
+  const cards = same && !resorted ? [...main.querySelectorAll('[data-folio]')] : [];
   const first = cards.findIndex((el) => el.getBoundingClientRect().bottom > 0);
   const anchorTop = first >= 0 ? cards[first].getBoundingClientRect().top : Infinity;
   const anchorIds = anchorTop < innerHeight ? cards.slice(first).map((el) => el.dataset.folio) : [];
@@ -642,7 +698,20 @@ async function matchCas(cas, say) {
       const code = codes.get(x.isin);
       const held = existing && code ? s.holdings.find((h) => h.folioId === existing.id && h.schemeCode === code) : null;
       const have = new Set((held?.txns || []).map(txnKey));
-      return { ...x, code, isNew: !held, fresh: x.txns.filter((t) => !have.has(txnKey(t))) };
+      const fresh = x.txns.filter((t) => !have.has(txnKey(t)));
+      // Statement check: what the tracker will hold after this import vs the statement's closing
+      // units and Total Cost Value (cost of the units held, stamp duty included).
+      let check = null;
+      if (code && x.closingUnits != null) {
+        const after = [...(held?.txns || []), ...fresh];
+        const st = after.length ? holdingStats({ txns: after }, { nav: 0 }, s.navDate) : { units: 0, invested: 0 };
+        check = {
+          units: st.units, invested: st.invested, afterImport: fresh.length > 0,
+          unitsOk: Math.abs(st.units - x.closingUnits) < 0.002,
+          costOk: x.costValue == null || Math.abs(st.invested - x.costValue) <= Math.max(2, x.costValue * 0.001),
+        };
+      }
+      return { ...x, code, isNew: !held, fresh, check };
     });
     const ready = holdings.filter((h) => h.code && h.fresh.length);
     // A new holding from a statement that starts part-way through has no cost for its opening units.
@@ -664,14 +733,21 @@ function reviewCasDialog(cas, rows, portfolioId) {
     const name = esc(h.name || h.isin);
     if (!h.code) return `<li class="warn">${name}<small>Couldn’t match ISIN ${esc(h.isin)} to a scheme — skipped. Add it by hand with “+ Transaction”.</small></li>`;
     const notes = [];
-    if (h.isNew && h.openingUnits > 0.001) notes.push(`${fmtUnits(h.openingUnits)} units held before ${date(cas.period?.from || h.txns[0].date)} aren’t in this statement, so invested and XIRR would be wrong. Use a “Since inception” statement.`);
+    if (h.isNew && h.openingUnits > 0.001) notes.push(`${fmtUnits(h.openingUnits)} units held before ${cas.period?.from || h.txns[0] ? date(cas.period?.from || h.txns[0].date) : 'this statement'} aren’t in this statement, so invested and XIRR would be wrong. Use a “Since inception” statement.`);
     if (!h.balanced) notes.push('Some rows couldn’t be read: the units don’t add up to the closing balance. Check this scheme after importing.');
-    const what = h.fresh.length ? `${plural(h.fresh.length, 'new transaction')}` : 'up to date';
-    return `<li class="${notes.length ? 'warn' : ''}">${name} <span class="muted">· ${what}</span>${notes.map((n) => `<small>${esc(n)}</small>`).join('')}</li>`;
+    const c = h.check;
+    const ours = c && `${fmtUnits(c.units)} units · ${rupees(c.invested)}`;
+    const theirs = c && `${fmtUnits(h.closingUnits)} units${h.costValue != null ? ` · ${rupees(h.costValue)}` : ''}`;
+    if (c && !(c.unitsOk && c.costOk)) {
+      notes.push(`Doesn’t match the statement${c.unitsOk ? ' (units match, cost differs)' : ''}. ${c.afterImport ? 'After this import the tracker would show' : 'The tracker shows'} ${ours}; the statement says ${theirs}.`);
+    }
+    const ok = c && c.unitsOk && c.costOk ? `<small class="ok">✓ Matches the statement: ${esc(theirs)}</small>` : '';
+    const what = h.fresh.length ? `${plural(h.fresh.length, 'new transaction')}` : h.txns.length ? 'up to date' : 'no transactions in this statement';
+    return `<li class="${notes.length ? 'warn' : ''}">${name} <span class="muted">· ${what}</span>${ok}${notes.map((n) => `<small>${esc(n)}</small>`).join('')}</li>`;
   };
   const folioRow = (r, i) => {
     const n = txnCount(r);
-    const tag = !n ? 'Up to date' : r.existing ? 'Already tracked' : 'New folio';
+    const tag = !n ? (r.existing ? 'Up to date' : 'Not in tracker') : r.existing ? 'Already tracked' : 'New folio';
     return `
       <label class="cas-folio${n ? '' : ' off'}">
         <input type="checkbox" name="f${i}" ${n && !r.gap ? 'checked' : ''} ${n ? '' : 'disabled'}>
@@ -682,6 +758,11 @@ function reviewCasDialog(cas, rows, portfolioId) {
       </label>`;
   };
   const total = rows.reduce((a, r) => a + txnCount(r), 0);
+  const checked = rows.flatMap((r) => r.holdings.filter((h) => h.check));
+  const off = checked.filter((h) => !(h.check.unitsOk && h.check.costOk)).length;
+  const checkLine = !checked.length ? ''
+    : off ? `<p class="cas-check warn"><b>Statement check:</b> ${off} of ${plural(checked.length, 'scheme')} won’t match the statement’s units and cost — marked below.</p>`
+    : `<p class="cas-check ok"><b>Statement check:</b> all ${plural(checked.length, 'scheme')} will match the statement’s units and cost.</p>`;
   openDialog({
     title: 'Review import',
     submit: total ? 'Import' : 'Done',
@@ -693,6 +774,7 @@ function reviewCasDialog(cas, rows, portfolioId) {
         <label class="field">Holder for new folios<select name="holder">${s.members.map((m) => `<option ${m.name === guess ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}<option value="Other" ${guess ? '' : 'selected'}>Other</option></select></label>
         <label class="field">Put new folios in<select name="portfolioId">${portfolioOptions(s, portfolioId)}</select></label>
       </div>` : ''}
+      ${checkLine}
       <div class="cas-list">${rows.map(folioRow).join('')}</div>`,
     onSubmit: async (d) => {
       if (!total) return;
@@ -737,6 +819,12 @@ document.addEventListener('click', (e) => {
   if (t.dataset.go != null) return go(t.dataset.go);
   if (t.hasAttribute('data-menu')) return openMenu();
   if (t.hasAttribute('data-theme-toggle')) return toggleTheme();
+  if (t.dataset.sort) {
+    const [list, key] = t.dataset.sort.split(':');
+    cycleSort(list, key);
+    render.resorted = true;
+    return render();
+  }
   if (t.hasAttribute('data-add-member')) return nameDialog('Add member', '', (n) => { const m = store.addMember(n); go(`#/member/${m.id}`); });
   if (t.dataset.addPortfolio) return nameDialog(`New portfolio for ${memberById(s, t.dataset.addPortfolio)?.name}`, '', (n) => { const p = store.addPortfolio(t.dataset.addPortfolio, n); go(`#/portfolio/${p.id}`); });
   if (t.dataset.renameMember) return nameDialog('Rename member', memberById(s, t.dataset.renameMember)?.name, (n) => store.renameMember(t.dataset.renameMember, n));
@@ -792,6 +880,13 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  const sortSel = e.target.closest('select[data-sort-select]');
+  if (sortSel) {
+    const [key, dir] = sortSel.value.split(':');
+    setSort(sortSel.dataset.sortSelect, key ? { key, dir: +dir } : null);
+    render.resorted = true;
+    render();
+  }
   const sel = e.target.closest('select[data-move]');
   if (sel) moveFolio(sel.dataset.move, sel.value || null);
   const roleSel = e.target.closest('select[data-set-role]');
