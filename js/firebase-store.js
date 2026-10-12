@@ -2,7 +2,7 @@
 import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, arrayUnion,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { fetchScheme, searchSchemes, navOn, schemeCodeForIsin } from './mf.js';
+import { fetchScheme, searchSchemes, navOn, schemeCodeForIsin, needsNav } from './mf.js';
 
 const COLS = ['members', 'portfolios', 'folios', 'holdings', 'schemes'];
 const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || String(a.name || a.folioNo || '').localeCompare(String(b.name || b.folioNo || ''));
@@ -52,24 +52,31 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   const save = (p) => p.catch(onError);
   const newId = (col) => doc(collection(db, col)).id;
 
-  // Pull fresh NAVs for every scheme we hold (once per visit).
+  // Pull the latest NAV for every scheme that doesn't have today's yet (see needsNav). Runs on
+  // load, when the tab comes back into view, and every 30 minutes while it's open.
+  let refreshing = false;
   async function refreshNavs() {
-    const today = new Date().toISOString().slice(0, 10);
-    const stale = data.schemes.filter((s) => !s.checkedOn || s.checkedOn < today);
+    if (refreshing) return;
+    refreshing = true;
+    const now = Date.now();
+    const stale = data.schemes.filter((s) => needsNav(s, now));
     await Promise.all(stale.map(async (s) => {
       try {
         const fresh = await fetchScheme(s.code);
         // Every signed-in family member may refresh NAVs (see firestore.rules).
-        await updateDoc(doc(db, 'schemes', s.code), { nav: fresh.nav, navDate: fresh.navDate, checkedOn: today });
+        await updateDoc(doc(db, 'schemes', s.code), { nav: fresh.nav, navDate: fresh.navDate, checkedOn: new Date(now).toISOString() });
       } catch (e) { console.warn('NAV refresh failed for', s.code, e); }
     }));
+    refreshing = false;
   }
+  document.addEventListener('visibilitychange', () => { if (state && document.visibilityState === 'visible') refreshNavs(); });
+  setInterval(() => { if (state) refreshNavs(); }, 30 * 60e3);
 
   async function ensureScheme(code) {
     const have = data.schemes.find((s) => s.code === code);
     if (have) return have;
     const s = await fetchScheme(code);
-    await setDoc(doc(db, 'schemes', code), { ...s, checkedOn: new Date().toISOString().slice(0, 10) });
+    await setDoc(doc(db, 'schemes', code), { ...s, checkedOn: new Date().toISOString() });
     return s;
   }
 

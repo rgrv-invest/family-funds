@@ -16,8 +16,9 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
     The owner email is hard-coded there and in `js/config.js`; other people are listed in `users/{email}`
     with role `viewer` | `editor` | `admin`.
 - **NAVs and scheme data** come from mfapi.in (AMFI data) in the browser: search, latest NAV,
-  NAV history (used to estimate units when left blank). NAVs refresh once a day per scheme,
-  triggered by whoever opens the app first.
+  NAV history (used to estimate units when left blank). Until a scheme has today's NAV (AMFI
+  publishes in the evening, IST) the app re-checks it at most every 2 hours: on load, when the
+  tab comes back into view, and every 30 minutes while open. Whoever has the app open does it.
 - **CAS import** (“Import CAS” button): editors upload a CAMS/KFintech *detailed* CAS PDF. It's opened
   in the browser with pdf.js (loaded from jsDelivr on demand, password supported) and never uploaded.
   Schemes are matched by ISIN to mfapi.in codes. Folios are matched by folio number, and
