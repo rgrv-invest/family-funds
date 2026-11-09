@@ -68,15 +68,23 @@ export function toast(msg, undo) {
   toastEl.style.pointerEvents = undo ? 'auto' : 'none';
 }
 
+// The holder is the member whose portfolio the folio sits in; an unassigned folio keeps the
+// holder it was last given (at import, when added, or by its last portfolio).
+const holderOf = (s, f) => {
+  const p = portfolioById(s, f.portfolioId);
+  return (p && memberById(s, p.memberId)?.name) || f.holder;
+};
+
 function moveFolio(folioId, portfolioId) {
   const s = store.get();
   const f = s.folios.find((x) => x.id === folioId);
   if (!f || f.portfolioId === portfolioId) return;
-  const from = f.portfolioId;
-  store.moveFolio(folioId, portfolioId);
+  const from = f.portfolioId, fromHolder = f.holder;
   const p = portfolioById(s, portfolioId);
+  const holder = p ? memberById(s, p.memberId)?.name : undefined; // moving to Unassigned keeps the holder
+  store.moveFolio(folioId, portfolioId, holder);
   const label = p ? `${memberById(s, p.memberId)?.name} · ${p.name}` : 'Unassigned';
-  toast(`Moved folio ${f.folioNo} to ${label}`, () => store.moveFolio(folioId, from));
+  toast(`Moved folio ${f.folioNo} to ${label}`, () => store.moveFolio(folioId, from, fromHolder));
 }
 
 // ---------- sidebar ----------
@@ -309,7 +317,7 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
         <div class="folio-head">
           <span class="folio-no">Folio ${esc(f.folioNo)}</span>
           <span class="chip">${esc(f.amc)}</span>
-          <span class="chip">Holder: ${esc(f.holder)}</span>
+          <span class="chip">Holder: ${esc(holderOf(s, f))}</span>
           ${showPortfolio ? `<span class="chip">${p ? esc(p.name) : 'Unassigned'}</span>` : ''}
           <span class="muted" style="font-size:12.5px">${rupees(sum.current)} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
         </div>
@@ -358,7 +366,7 @@ function closedCards(s, folios) {
         <div class="folio-head">
           <span class="folio-no">Folio ${esc(c.f.folioNo)}</span>
           <span class="chip">${esc(c.f.amc)}</span>
-          <span class="chip">Holder: ${esc(c.f.holder)}</span>
+          <span class="chip">Holder: ${esc(holderOf(s, c.f))}</span>
           <span class="chip">${p ? `${esc(memberById(s, p.memberId)?.name || '')} · ${esc(p.name)}` : 'Unassigned'}</span>
           ${c.closedOn ? `<span class="chip">Closed ${date(c.closedOn)}</span>` : ''}
           <span class="muted" style="font-size:12.5px">Realised ${gain(c)} · <span class="${tone(c.rate)}">XIRR ${c.rate == null ? '—' : signedPct(c.rate)}</span></span>

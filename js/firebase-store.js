@@ -109,7 +109,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       save(b.commit());
     },
 
-    moveFolio: (id, portfolioId) => save(updateDoc(doc(db, 'folios', id), { portfolioId })),
+    moveFolio: (id, portfolioId, holder) => save(updateDoc(doc(db, 'folios', id), holder ? { portfolioId, holder } : { portfolioId })),
     async addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units }) {
       await ensureScheme(schemeCode);
       const fid = newId('folios');
