@@ -345,3 +345,9 @@ dialog.wide { width: min(640px, calc(100vw - 32px)); }
 .cas-check { margin: 0; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .cas-check.ok { color: var(--up); }
 .cas-check.warn { color: var(--down); }
+
+/* closed folios */
+.folio.closed .folio-actions .folio-btns { margin-top: 0; }
+.scheme.sold .sn { color: var(--muted); }
+.empty a { color: var(--accent); }
+.closed-note { margin: 10px 0 0; }

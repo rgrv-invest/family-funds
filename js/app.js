@@ -1,5 +1,6 @@
 import {
   summarize, schemeSummary, holdingsOfFolios, foliosOfPortfolio, portfoliosOfMember, foliosOfMember, holdingStats,
+  folioClosed, xirr,
 } from './calc.js';
 import {
   rupees, compact, pct, signedPct, signedRupees, tone, date, esc, fmtNav, fmtUnits,
@@ -20,7 +21,7 @@ const assetColor = (name) => ASSET_COLOR[name] || 'var(--s0)';
 function route() {
   const [type, id] = location.hash.replace(/^#\/?/, '').split('/');
   if (type === 'member' || type === 'portfolio') return { type, id };
-  if (type === 'unassigned' || type === 'access') return { type };
+  if (type === 'unassigned' || type === 'access' || type === 'closed') return { type };
   return { type: 'family' };
 }
 const go = (hash) => { location.hash = hash; };
@@ -46,7 +47,17 @@ export function start(s, sess) {
 // ---------- helpers ----------
 const memberById = (s, id) => s.members.find((m) => m.id === id);
 const portfolioById = (s, id) => s.portfolios.find((p) => p.id === id);
-const unassigned = (s) => s.folios.filter((f) => !f.portfolioId || !portfolioById(s, f.portfolioId));
+// Closed folios (every unit sold) are listed on their own page, not with the folios still held.
+// They keep their portfolio, so a new purchase puts them back where they were. Like any sold
+// units, they count nowhere else: not in Invested, Current value, Gain / loss or XIRR.
+const closedCache = new WeakMap();
+const closedIds = (s) => {
+  if (!closedCache.has(s)) closedCache.set(s, new Set(s.folios.filter((f) => folioClosed(s, f.id)).map((f) => f.id)));
+  return closedCache.get(s);
+};
+const openFolios = (s, fs) => fs.filter((f) => !closedIds(s).has(f.id));
+const unassignedAll = (s) => s.folios.filter((f) => !f.portfolioId || !portfolioById(s, f.portfolioId));
+const unassigned = (s) => openFolios(s, unassignedAll(s));
 
 export function toast(msg, undo) {
   toastEl.innerHTML = esc(msg) + (undo ? '<button class="undo">Undo</button>' : '');
@@ -79,7 +90,7 @@ function renderSidebar(s, r) {
     const ps = portfoliosOfMember(s, m.id);
     html += `<button class="nav-item nav-member${active('member', m.id)}" data-go="#/member/${m.id}">${esc(m.name)}</button>`;
     for (const p of ps) {
-      const n = foliosOfPortfolio(s, p.id).length;
+      const n = openFolios(s, foliosOfPortfolio(s, p.id)).length;
       html += `<button class="nav-item nav-portfolio${active('portfolio', p.id)}" data-go="#/portfolio/${p.id}" data-drop="${p.id}">
         <span>${esc(p.name)}</span><span class="count">${n}</span></button>`;
     }
@@ -90,6 +101,7 @@ function renderSidebar(s, r) {
     <div class="nav-section">
       <button class="nav-item${active('unassigned')}" data-go="#/unassigned" data-drop="">
         <span>Unassigned folios</span><span class="count">${un}</span></button>
+      ${closedIds(s).size ? `<button class="nav-item${active('closed')}" data-go="#/closed"><span>Closed folios</span><span class="count">${closedIds(s).size}</span></button>` : ''}
       ${ifEdit('<button class="nav-item nav-add" style="padding-left:10px" data-add-member>+ Add member</button>')}
       ${isAdmin() ? `<button class="nav-item${active('access')}" data-go="#/access">Access</button>` : ''}
     </div>
@@ -259,8 +271,9 @@ function holdingsTable(s, holdings, total) {
     </tbody></table></div>`;
 }
 
-function folioCards(s, folios, { showPortfolio = false } = {}) {
-  if (!folios.length) return `<div class="card"><div class="card-b empty">${canEdit() ? 'No folios here yet. Add one, drag one onto this portfolio in the sidebar, or use “Move to” on any folio.' : 'No folios here yet.'}</div></div>`;
+function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
+  const closedNote = closed ? ` <a href="#/closed">${plural(closed, 'closed folio')}</a> ${closed === 1 ? 'is' : 'are'} under Closed folios.` : '';
+  if (!folios.length) return `<div class="card"><div class="card-b empty">${closed ? 'No folios with units left here.' : canEdit() ? 'No folios here yet. Add one, drag one onto this portfolio in the sidebar, or use “Move to” on any folio.' : 'No folios here yet.'}${closedNote}</div></div>`;
   const schemeBy = Object.fromEntries(s.schemes.map((x) => [x.code, x]));
   const sort = sorts.folios;
   // Each column sorts the folios by their totals, and the schemes inside each folio by their own values.
@@ -306,6 +319,7 @@ function folioCards(s, folios, { showPortfolio = false } = {}) {
           <div class="scheme scheme-head"><span class="sn">${sortHead('folios', 'name', 'Scheme')}</span><span>${sortHead('folios', 'units', 'Units')}</span><span>${sortHead('folios', 'invested', 'Invested')}</span><span>${sortHead('folios', 'current', 'Current')}</span><span>${sortHead('folios', 'gain', 'Gain')}</span></div>
           ${items.map(({ h, sc, st }) => {
             if (!sc) return `<div class="scheme"><span class="sn muted">Loading scheme ${esc(h.schemeCode)}…</span></div>`;
+            if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span><span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
             const g = st.current - st.invested;
             return `<div class="scheme">
               <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · NAV ${fmtNav(sc.nav)}</small></span>
@@ -319,6 +333,51 @@ function folioCards(s, folios, { showPortfolio = false } = {}) {
       </div>
       ${ifEdit(`<div class="folio-actions"><label class="muted" style="font-size:11.5px;display:block;margin-bottom:3px">Move to</label>${moveSelect(s, f)}
         <div class="folio-btns"><button class="btn small" data-add-txn="${f.id}">+ Transaction</button><button class="btn small danger" data-delete-folio="${f.id}">Delete</button></div></div>`)}
+    </article>`;
+  }).join('')}</div>${closedNote ? `<p class="hint closed-note">${closedNote.trim()}</p>` : ''}`;
+}
+
+// Closed folios: what went in, what came back, and the return, per folio and per scheme.
+function closedCards(s, folios) {
+  if (!folios.length) return '<div class="card"><div class="card-b empty">No closed folios.</div></div>';
+  const schemeBy = Object.fromEntries(s.schemes.map((x) => [x.code, x]));
+  const cards = folios.map((f) => {
+    const items = s.holdings.filter((h) => h.folioId === f.id).map((h) => ({ h, sc: schemeBy[h.schemeCode], st: holdingStats(h, { nav: 0 }, s.navDate) }));
+    const bought = items.reduce((a, x) => a + x.st.bought, 0);
+    const sold = items.reduce((a, x) => a + x.st.sold, 0);
+    const closedOn = items.reduce((m, x) => (x.st.lastSale > m ? x.st.lastSale : m), '');
+    return { f, items, bought, sold, closedOn, rate: xirr(items.flatMap((x) => x.st.flows)) };
+  }).sort((a, b) => b.closedOn.localeCompare(a.closedOn));
+  const gain = (x) => `<span class="${tone(x.sold - x.bought)}">${signedRupees(x.sold - x.bought)}</span>`;
+  return `<div class="folio-list">${cards.map((c) => {
+    const p = portfolioById(s, c.f.portfolioId);
+    return `
+    <article class="folio closed" data-folio="${c.f.id}">
+      <span></span>
+      <div>
+        <div class="folio-head">
+          <span class="folio-no">Folio ${esc(c.f.folioNo)}</span>
+          <span class="chip">${esc(c.f.amc)}</span>
+          <span class="chip">Holder: ${esc(c.f.holder)}</span>
+          <span class="chip">${p ? `${esc(memberById(s, p.memberId)?.name || '')} · ${esc(p.name)}` : 'Unassigned'}</span>
+          ${c.closedOn ? `<span class="chip">Closed ${date(c.closedOn)}</span>` : ''}
+          <span class="muted" style="font-size:12.5px">Realised ${gain(c)} · <span class="${tone(c.rate)}">XIRR ${c.rate == null ? '—' : signedPct(c.rate)}</span></span>
+        </div>
+        <div class="schemes">
+          <div class="scheme scheme-head"><span class="sn">Scheme</span><span>Bought</span><span>Sold</span><span>Gain</span><span>XIRR</span></div>
+          ${c.items.map(({ sc, st }) => {
+            const r = xirr(st.flows);
+            return `<div class="scheme">
+              <span class="sn">${esc(sc?.name || 'Scheme')}<small>${st.lastSale ? `Last sold ${date(st.lastSale)}` : 'All purchases reversed'}</small></span>
+              <span class="num" data-l="Bought">${rupees(st.bought)}</span>
+              <span class="num" data-l="Sold">${rupees(st.sold)}</span>
+              <span class="num" data-l="Gain">${gain(st)}</span>
+              <span class="num ${tone(r)}" data-l="XIRR">${r == null ? '—' : signedPct(r)}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      ${ifEdit(`<div class="folio-actions"><div class="folio-btns"><button class="btn small" data-add-txn="${c.f.id}">+ Transaction</button><button class="btn small danger" data-delete-folio="${c.f.id}">Delete</button></div></div>`)}
     </article>`;
   }).join('')}</div>`;
 }
@@ -353,9 +412,9 @@ function viewFamily(s) {
     };
   });
   const un = unassigned(s);
-  if (un.length) rows.push({ name: 'Unassigned folios', sub: `${un.length} folio${un.length === 1 ? '' : 's'}`, href: '#/unassigned', sum: summarize(holdingsOfFolios(s, un.map((f) => f.id)), s) });
+  if (un.length) rows.push({ name: 'Unassigned folios', sub: `${un.length} folio${un.length === 1 ? '' : 's'}`, href: '#/unassigned', sum: summarize(holdingsOfFolios(s, unassignedAll(s).map((f) => f.id)), s) });
   return (
-    header({ title: 'Family overview', subtitle: `${plural(s.members.length, 'member')} · ${plural(s.portfolios.length, 'portfolio')} · ${plural(s.folios.length, 'folio')}`, actions: ifEdit(`<button class="btn" data-add-member>+ Add member</button><button class="btn" data-import-cas>Import CAS</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
+    header({ title: 'Family overview', subtitle: `${plural(s.members.length, 'member')} · ${plural(s.portfolios.length, 'portfolio')} · ${plural(openFolios(s, s.folios).length, 'folio')}${closedIds(s).size ? ` · ${closedIds(s).size} closed` : ''}`, actions: ifEdit(`<button class="btn" data-add-member>+ Add member</button><button class="btn" data-import-cas>Import CAS</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
     (session.banner ? `<div class="banner">${session.banner}</div>` : '') +
     (!s.members.length && !s.folios.length ? welcome() : familyBody(s, all, rows))
   );
@@ -377,13 +436,13 @@ function viewMember(s, id) {
   const sum = summarize(holdingsOfFolios(s, folios.map((f) => f.id)), s);
   const rows = portfoliosOfMember(s, id).map((p) => {
     const fs = foliosOfPortfolio(s, p.id);
-    return { name: p.name, sub: `${fs.length} folio${fs.length === 1 ? '' : 's'}`, href: `#/portfolio/${p.id}`, sum: summarize(holdingsOfFolios(s, fs.map((f) => f.id)), s) };
+    return { name: p.name, sub: plural(openFolios(s, fs).length, 'folio'), href: `#/portfolio/${p.id}`, sum: summarize(holdingsOfFolios(s, fs.map((f) => f.id)), s) };
   });
   return (
     header({
       crumbs: [{ label: 'Family', href: '#/' }],
       title: m.name,
-      subtitle: `${rows.length} portfolio${rows.length === 1 ? '' : 's'} · ${folios.length} folios`,
+      subtitle: `${plural(rows.length, 'portfolio')} · ${plural(openFolios(s, folios).length, 'folio')}`,
       actions: ifEdit(`<button class="btn" data-rename-member="${m.id}">Rename</button>${rows.length ? '' : `<button class="btn danger" data-delete-member="${m.id}">Remove</button>`}<button class="btn primary" data-add-portfolio="${m.id}">+ Add portfolio</button>`),
     }) +
     kpis(sum) +
@@ -391,7 +450,7 @@ function viewMember(s, id) {
     `<div style="margin-top:16px">${breakups(sum)}</div>` +
     holdingsTable(s, holdingsOfFolios(s, folios.map((f) => f.id)), sum.current) +
     `<div class="section-title"><h2>All folios</h2></div>${ifEdit('<p class="hint">Drag a folio onto any portfolio in the sidebar, or pick one under “Move to”.</p>')}` +
-    folioCards(s, folios, { showPortfolio: true })
+    folioCards(s, openFolios(s, folios), { showPortfolio: true, closed: folios.length - openFolios(s, folios).length })
   );
 }
 
@@ -405,13 +464,13 @@ function viewPortfolio(s, id) {
     header({
       crumbs: [{ label: 'Family', href: '#/' }, { label: m?.name || '', href: `#/member/${p.memberId}` }],
       title: p.name,
-      subtitle: `${folios.length} folio${folios.length === 1 ? '' : 's'}`,
-      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button>${folios.length ? `<button class="btn danger" data-delete-all-folios="${p.id}">Delete all folios</button>` : ''}<button class="btn" data-import-cas="${p.id}">Import CAS</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
+      subtitle: plural(openFolios(s, folios).length, 'folio'),
+      actions: ifEdit(`<button class="btn" data-rename-portfolio="${p.id}">Rename</button><button class="btn danger" data-delete-portfolio="${p.id}">Delete</button>${openFolios(s, folios).length ? `<button class="btn danger" data-delete-all-folios="${p.id}">Delete all folios</button>` : ''}<button class="btn" data-import-cas="${p.id}">Import CAS</button><button class="btn primary" data-add-folio="${p.id}">+ Add folio</button>`),
     }) +
     kpis(sum) + breakups(sum) +
     holdingsTable(s, holdingsOfFolios(s, folios.map((f) => f.id)), sum.current) +
     `<div class="section-title"><h2>Folios</h2></div>${ifEdit('<p class="hint">Drag a folio onto another portfolio in the sidebar, or pick one under “Move to”.</p>')}` +
-    folioCards(s, folios)
+    folioCards(s, openFolios(s, folios), { closed: folios.length - openFolios(s, folios).length })
   );
 }
 
@@ -419,7 +478,15 @@ function viewUnassigned(s) {
   const folios = unassigned(s);
   return (
     header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Unassigned folios', subtitle: 'Folios not in any portfolio. They still count in the family total.', actions: ifEdit(`<button class="btn" data-import-cas>Import CAS</button><button class="btn primary" data-add-folio>+ Add folio</button>`) }) +
-    folioCards(s, folios)
+    folioCards(s, folios, { closed: unassignedAll(s).length - folios.length })
+  );
+}
+
+function viewClosed(s) {
+  const folios = s.folios.filter((f) => closedIds(s).has(f.id));
+  return (
+    header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Closed folios', subtitle: 'Every unit in these folios has been sold. Their realised gain and XIRR are shown here only; they don’t count in any totals, gains or XIRR elsewhere.' }) +
+    closedCards(s, folios)
   );
 }
 
@@ -471,6 +538,7 @@ function render() {
     r.type === 'member' ? viewMember(s, r.id)
     : r.type === 'portfolio' ? viewPortfolio(s, r.id)
     : r.type === 'unassigned' ? viewUnassigned(s)
+    : r.type === 'closed' ? viewClosed(s)
     : r.type === 'access' ? viewAccess(s)
     : viewFamily(s);
   if (same) {
@@ -843,7 +911,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.addTxn) return addTxnDialog(t.dataset.addTxn);
   if (t.dataset.deleteAllFolios) {
     const p = portfolioById(s, t.dataset.deleteAllFolios);
-    const fs = foliosOfPortfolio(s, p.id);
+    const fs = openFolios(s, foliosOfPortfolio(s, p.id));
     return openDialog({
       title: `Delete all ${plural(fs.length, 'folio')} in “${p.name}”?`, submit: `Delete ${plural(fs.length, 'folio')}`,
       body: `<p style="margin:0;color:var(--ink-2)">This permanently removes ${fs.length === 1 ? 'this folio' : `these ${fs.length} folios`} and all their transactions for everyone. The portfolio itself stays. To keep folios but take them out of this portfolio, use “Delete” on the portfolio instead — its folios move to Unassigned.</p>
