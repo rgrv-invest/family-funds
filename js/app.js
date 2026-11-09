@@ -48,8 +48,8 @@ export function start(s, sess) {
 const memberById = (s, id) => s.members.find((m) => m.id === id);
 const portfolioById = (s, id) => s.portfolios.find((p) => p.id === id);
 // Closed folios (every unit sold) are listed on their own page, not with the folios still held.
-// They keep their portfolio, so a new purchase puts them back where they were. Their past cash
-// flows still count in XIRR; they add nothing to Invested, Current value or Gain / loss.
+// They keep their portfolio, so a new purchase puts them back where they were. Like any sold
+// units, they count nowhere else: not in Invested, Current value, Gain / loss or XIRR.
 const closedCache = new WeakMap();
 const closedIds = (s) => {
   if (!closedCache.has(s)) closedCache.set(s, new Set(s.folios.filter((f) => folioClosed(s, f.id)).map((f) => f.id)));
@@ -485,7 +485,7 @@ function viewUnassigned(s) {
 function viewClosed(s) {
   const folios = s.folios.filter((f) => closedIds(s).has(f.id));
   return (
-    header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Closed folios', subtitle: 'Every unit in these folios has been sold. They add nothing to Invested, Current value or Gain / loss; their past cash flows still count in XIRR.' }) +
+    header({ crumbs: [{ label: 'Family', href: '#/' }], title: 'Closed folios', subtitle: 'Every unit in these folios has been sold. Their realised gain and XIRR are shown here only; they don’t count in any totals, gains or XIRR elsewhere.' }) +
     closedCards(s, folios)
   );
 }

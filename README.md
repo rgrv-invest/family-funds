@@ -22,8 +22,9 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 - **Gains and sales:** Invested is the FIFO cost of the units still held, so Gain / loss is current
   value minus that cost; selling units reduces both. A folio whose units are all sold moves to
   **Closed folios** (sidebar), which shows what was bought and sold, the realised gain and XIRR.
-  It keeps its portfolio, so buying again brings it back. Past cash flows of sold units still
-  count in portfolio, member and family XIRR.
+  It keeps its portfolio, so buying again brings it back. XIRR, like Gain / loss, covers only the
+  units still held: each remaining lot's cost on its purchase date against today's value. Sold
+  units, sales and IDCW payouts are left out (the Closed folios page shows their realised XIRR).
 - **CAS import** (“Import CAS” button): editors upload a CAMS/KFintech *detailed* CAS PDF. It's opened
   in the browser with pdf.js (loaded from jsDelivr on demand, password supported) and never uploaded.
   Schemes are matched by ISIN to mfapi.in codes. Folios are matched by folio number, and

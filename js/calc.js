@@ -51,7 +51,8 @@ export function xirr(flows) {
   return (lo + hi) / 2;
 }
 
-// Stats for one holding: units held, FIFO cost of units held, current value, cash flows,
+// Stats for one holding: units held, FIFO cost of units held, current value, all cash flows,
+// the cash flows of the units still held (each remaining lot's cost on its purchase date),
 // the date of the last purchase that wasn't reversed, and (for closed holdings) what was bought,
 // what came back from sales and payouts, and the date of the last sale.
 export function holdingStats(h, scheme, navDate) {
@@ -92,7 +93,8 @@ export function holdingStats(h, scheme, navDate) {
   const invested = lots.reduce((s, l) => s + l.cost, 0);
   const current = units * scheme.nav;
   const lastBuy = buys.reduce((m, b) => (!b.reversed && b.date > m ? b.date : m), '') || null;
-  return { units, invested, current, flows, navDate, lastBuy, bought, sold, lastSale };
+  const heldFlows = lots.filter((l) => l.units > 1e-9).map((l) => ({ date: l.date, amount: -l.cost }));
+  return { units, invested, current, flows, heldFlows, navDate, lastBuy, bought, sold, lastSale };
 }
 
 // Aggregate a list of holdings into totals, XIRR and breakups.
@@ -108,11 +110,12 @@ export function summarize(holdings, state) {
     invested += st.invested;
     current += st.current;
     if (st.units > 1e-6) held++;
-    flows.push(...st.flows);
+    // XIRR covers only the units still held, like Gain / loss: sold units and their sales are left out.
+    flows.push(...st.heldFlows);
     byAsset[s.assetClass] = (byAsset[s.assetClass] || 0) + st.current;
     byCategory[s.category] = (byCategory[s.category] || 0) + st.current;
   }
-  // Value on the NAV date, or on the latest transaction if that's newer: NAVs are published a day
+  // Value on the NAV date, or on the latest purchase if that's newer: NAVs are published a day
   // or so late, and a purchase dated after the valuation would read a loss as a huge gain.
   const valueDate = flows.reduce((m, f) => (f.date > m ? f.date : m), state.navDate);
   const r = current > 0 ? xirr([...flows, { date: valueDate, amount: current }]) : null;
