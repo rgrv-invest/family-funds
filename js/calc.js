@@ -52,11 +52,13 @@ export function xirr(flows) {
 }
 
 // Stats for one holding: units held, FIFO cost of units held, current value, cash flows,
-// and the date of the last purchase that wasn't reversed.
+// the date of the last purchase that wasn't reversed, and (for closed holdings) what was bought,
+// what came back from sales and payouts, and the date of the last sale.
 export function holdingStats(h, scheme, navDate) {
   const lots = [];
   const buys = [];
   const flows = [];
+  let bought = 0, sold = 0, lastSale = null;
   // Same day: purchases before sales, so a reversal printed above its purchase can still cancel it.
   for (const t of [...h.txns].sort((a, b) => a.date.localeCompare(b.date) || b.units - a.units)) {
     flows.push({ date: t.date, amount: -t.amount });
@@ -64,11 +66,16 @@ export function holdingStats(h, scheme, navDate) {
       const lot = { units: t.units, cost: t.amount, date: t.date };
       lots.push(lot);
       buys.push(lot);
+      bought += t.amount;
+    } else if (t.units === 0) {
+      sold -= t.amount; // IDCW payout: money back, no units
     } else {
       // A reversal (bounced cheque, rejected purchase) cancels the purchase it reverses: same units,
       // same money back. Remove that lot instead of selling the oldest units first.
       const r = lots.findLastIndex((l) => Math.abs(l.units + t.units) < 5e-4 && Math.abs(l.cost + t.amount) <= Math.max(1, l.cost * 1e-3));
-      if (r >= 0) { lots[r].reversed = true; lots.splice(r, 1); continue; }
+      if (r >= 0) { lots[r].reversed = true; bought -= lots[r].cost; lots.splice(r, 1); continue; }
+      sold -= t.amount;
+      lastSale = t.date;
       let toSell = -t.units;
       while (toSell > 1e-9 && lots.length) {
         const lot = lots[0];
@@ -85,13 +92,13 @@ export function holdingStats(h, scheme, navDate) {
   const invested = lots.reduce((s, l) => s + l.cost, 0);
   const current = units * scheme.nav;
   const lastBuy = buys.reduce((m, b) => (!b.reversed && b.date > m ? b.date : m), '') || null;
-  return { units, invested, current, flows, navDate, lastBuy };
+  return { units, invested, current, flows, navDate, lastBuy, bought, sold, lastSale };
 }
 
 // Aggregate a list of holdings into totals, XIRR and breakups.
 export function summarize(holdings, state) {
   const schemeBy = Object.fromEntries(state.schemes.map((s) => [s.code, s]));
-  let invested = 0, current = 0;
+  let invested = 0, current = 0, held = 0;
   const flows = [];
   const byAsset = {}, byCategory = {};
   for (const h of holdings) {
@@ -100,6 +107,7 @@ export function summarize(holdings, state) {
     const st = holdingStats(h, s, state.navDate);
     invested += st.invested;
     current += st.current;
+    if (st.units > 1e-6) held++;
     flows.push(...st.flows);
     byAsset[s.assetClass] = (byAsset[s.assetClass] || 0) + st.current;
     byCategory[s.category] = (byCategory[s.category] || 0) + st.current;
@@ -110,6 +118,7 @@ export function summarize(holdings, state) {
   const r = current > 0 ? xirr([...flows, { date: valueDate, amount: current }]) : null;
   const toList = (o) =>
     Object.entries(o)
+      .filter(([, value]) => value > 1e-6) // sold-out funds have nothing left to show
       .map(([name, value]) => ({ name, value, pct: current ? value / current : 0 }))
       .sort((a, b) => b.value - a.value);
   return {
@@ -120,7 +129,7 @@ export function summarize(holdings, state) {
     xirr: r,
     byAsset: toList(byAsset),
     byCategory: toList(byCategory),
-    count: holdings.length,
+    count: held,
   };
 }
 
@@ -135,6 +144,12 @@ export const foliosOfMember = (state, mid) => {
   const pids = new Set(portfoliosOfMember(state, mid).map((p) => p.id));
   return state.folios.filter((f) => pids.has(f.portfolioId));
 };
+
+// A folio is closed once every unit in it has been sold (or every purchase reversed).
+export function folioClosed(state, folioId) {
+  const hs = state.holdings.filter((h) => h.folioId === folioId);
+  return hs.length > 0 && hs.every((h) => holdingStats(h, { nav: 0 }, state.navDate).units <= 1e-6);
+}
 
 // Holdings grouped by scheme across all the given folios.
 export function schemeSummary(holdings, state) {

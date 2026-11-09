@@ -19,6 +19,11 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   NAV history (used to estimate units when left blank). Until a scheme has today's NAV (AMFI
   publishes in the evening, IST) the app re-checks it at most every 3 hours: on load, when the
   tab comes back into view, and every hour while open. Whoever has the app open does it.
+- **Gains and sales:** Invested is the FIFO cost of the units still held, so Gain / loss is current
+  value minus that cost; selling units reduces both. A folio whose units are all sold moves to
+  **Closed folios** (sidebar), which shows what was bought and sold, the realised gain and XIRR.
+  It keeps its portfolio, so buying again brings it back. Past cash flows of sold units still
+  count in portfolio, member and family XIRR.
 - **CAS import** (“Import CAS” button): editors upload a CAMS/KFintech *detailed* CAS PDF. It's opened
   in the browser with pdf.js (loaded from jsDelivr on demand, password supported) and never uploaded.
   Schemes are matched by ISIN to mfapi.in codes. Folios are matched by folio number, and
