@@ -214,6 +214,7 @@ table.holdings td:first-child { white-space: normal; min-width: 220px; }
 .chip { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); }
 .schemes { margin-top: 8px; display: grid; gap: 6px; }
 .scheme { display: grid; grid-template-columns: 1fr repeat(4, minmax(78px, auto)); gap: 14px; font-size: 13px; align-items: baseline; }
+.with-date .scheme { grid-template-columns: 1fr repeat(5, minmax(78px, auto)); }
 .scheme .sn { color: var(--ink-2); min-width: 0; }
 .scheme .sn small { display: block; color: var(--muted); font-size: 11.5px; }
 .scheme > span:not(.sn) { text-align: right; }
@@ -351,3 +352,4 @@ dialog.wide { width: min(640px, calc(100vw - 32px)); }
 .scheme.sold .sn { color: var(--muted); }
 .empty a { color: var(--accent); }
 .closed-note { margin: 10px 0 0; }
+@media (max-width: 760px) { .with-date .scheme { grid-template-columns: 1fr 1fr; } }

@@ -278,31 +278,30 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
   const sort = sorts.folios;
   // Each column sorts the folios by their totals, and the schemes inside each folio by their own values.
   const gainPct = (inv, cur) => (inv ? (cur - inv) / inv : null);
-  const SCHEME_SORT = { name: (x) => x.sc?.name, units: (x) => x.st?.units, invested: (x) => x.st?.invested, current: (x) => x.st?.current, gain: (x) => x.st && gainPct(x.st.invested, x.st.current) };
+  const SCHEME_SORT = { name: (x) => x.sc?.name, lastBuy: (x) => x.lastBuy, units: (x) => x.st?.units, invested: (x) => x.st?.invested, current: (x) => x.st?.current, gain: (x) => x.st && gainPct(x.st.invested, x.st.current) };
   const cards = folios.map((f) => {
     const hs = s.holdings.filter((h) => h.folioId === f.id);
     const items = hs.map((h) => {
       const sc = schemeBy[h.schemeCode];
-      return { h, sc, st: sc ? holdingStats(h, sc, s.navDate) : null };
+      const st = sc ? holdingStats(h, sc, s.navDate) : null;
+      return { h, sc, st, lastBuy: (st || holdingStats(h, { nav: 0 }, s.navDate)).lastBuy };
     });
     const sum = summarize(hs, s);
     return { f, hs, sum, items: sortBy(items, sort, (x, k) => SCHEME_SORT[k]?.(x)) };
   });
   const FOLIO_SORT = {
     name: (c) => c.items.map((x) => x.sc?.name || '').sort()[0],
+    lastBuy: (c) => c.items.reduce((m, x) => (x.lastBuy > m ? x.lastBuy : m), '') || null,
     units: (c) => c.items.reduce((a, x) => a + (x.st?.units || 0), 0),
     invested: (c) => c.sum.invested, current: (c) => c.sum.current, gain: (c) => gainPct(c.sum.invested, c.sum.current),
   };
   const sortOpts = [['', 'Default order'], ['name:1', 'Scheme, A–Z'], ['name:-1', 'Scheme, Z–A'],
+    ['lastBuy:-1', 'Last purchase, newest first'], ['lastBuy:1', 'Last purchase, oldest first'],
     ...[['invested', 'Invested'], ['current', 'Current value'], ['gain', 'Gain']].flatMap(([k, l]) => [[`${k}:-1`, `${l}, high to low`], [`${k}:1`, `${l}, low to high`]])];
   const sel = sort ? `${sort.key}:${sort.dir}` : '';
   return `<label class="sort-select">Sort folios<select data-sort-select="folios">${sortOpts.map(([v, l]) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
   <div class="folio-list">${sortBy(cards, sort, (c, k) => FOLIO_SORT[k]?.(c)).map(({ f, sum, items }) => {
     const p = portfolioById(s, f.portfolioId);
-    const lastBuy = items.reduce((m, x) => {
-      const d = (x.st || holdingStats(x.h, { nav: 0 }, s.navDate)).lastBuy;
-      return d && d > m ? d : m;
-    }, '');
     return `
     <article class="folio" draggable="${canEdit()}" data-folio="${f.id}">
       ${canEdit() ? '<span class="grip" aria-hidden="true">⋮⋮</span>' : '<span></span>'}
@@ -311,18 +310,19 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
           <span class="folio-no">Folio ${esc(f.folioNo)}</span>
           <span class="chip">${esc(f.amc)}</span>
           <span class="chip">Holder: ${esc(f.holder)}</span>
-          ${lastBuy ? `<span class="chip">Last purchase: ${date(lastBuy)}</span>` : ''}
           ${showPortfolio ? `<span class="chip">${p ? esc(p.name) : 'Unassigned'}</span>` : ''}
           <span class="muted" style="font-size:12.5px">${rupees(sum.current)} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
         </div>
-        <div class="schemes">
-          <div class="scheme scheme-head"><span class="sn">${sortHead('folios', 'name', 'Scheme')}</span><span>${sortHead('folios', 'units', 'Units')}</span><span>${sortHead('folios', 'invested', 'Invested')}</span><span>${sortHead('folios', 'current', 'Current')}</span><span>${sortHead('folios', 'gain', 'Gain')}</span></div>
-          ${items.map(({ h, sc, st }) => {
+        <div class="schemes with-date">
+          <div class="scheme scheme-head"><span class="sn">${sortHead('folios', 'name', 'Scheme')}</span><span>${sortHead('folios', 'lastBuy', 'Last purchase')}</span><span>${sortHead('folios', 'units', 'Units')}</span><span>${sortHead('folios', 'invested', 'Invested')}</span><span>${sortHead('folios', 'current', 'Current')}</span><span>${sortHead('folios', 'gain', 'Gain')}</span></div>
+          ${items.map(({ h, sc, st, lastBuy }) => {
             if (!sc) return `<div class="scheme"><span class="sn muted">Loading scheme ${esc(h.schemeCode)}…</span></div>`;
-            if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span><span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
+            const bought = `<span class="num" data-l="Last purchase">${lastBuy ? date(lastBuy) : '—'}</span>`;
+            if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span>${bought}<span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
             const g = st.current - st.invested;
             return `<div class="scheme">
               <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · NAV ${fmtNav(sc.nav)}</small></span>
+              ${bought}
               <span class="num" data-l="Units">${fmtUnits(st.units)}</span>
               <span class="num" data-l="Invested">${rupees(st.invested)}</span>
               <span class="num" data-l="Current">${rupees(st.current)}</span>
