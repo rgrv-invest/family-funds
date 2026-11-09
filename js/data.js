@@ -147,8 +147,8 @@ export const sampleStore = {
       folios: state.folios.map((f) => (f.portfolioId === portfolioId ? { ...f, portfolioId: null } : f)),
     });
   },
-  moveFolio(folioId, portfolioId) {
-    commit({ folios: state.folios.map((f) => (f.id === folioId ? { ...f, portfolioId } : f)) });
+  moveFolio(folioId, portfolioId, holder) {
+    commit({ folios: state.folios.map((f) => (f.id === folioId ? { ...f, portfolioId, ...(holder ? { holder } : {}) } : f)) });
   },
   // Scheme search/lookup against the sample list (the live app uses mfapi.in).
   searchSchemes: async (q) => {

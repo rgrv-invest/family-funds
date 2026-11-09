@@ -58,7 +58,7 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 ```
 members/{id}     { name, order }
 portfolios/{id}  { memberId, name, order }
-folios/{id}      { folioNo, amc, holder, portfolioId|null, order }
+folios/{id}      { folioNo, amc, holder, portfolioId|null, order }   // holder shown = the portfolio's member; saved on move, kept when unassigned
 holdings/{id}    { folioId, schemeCode, txns: [{ date: 'YYYY-MM-DD', amount, units }] }   // redemptions: negative amount & units
 schemes/{code}   { code, name, amc, assetClass, category, amfiCategory, isin, nav, navDate, checkedOn }
 users/{email}    { role, updatedAt }
