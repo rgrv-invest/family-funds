@@ -86,6 +86,7 @@ function splitNums(rest) {
 function schemeName(header) {
   return header
     .replace(/^[A-Z0-9]{1,12}-/, '')
+    .replace(/\s*Registrar\s*:\s*\S+/gi, '')
     .replace(/\s*-?\s*ISIN\s*:.*$/i, '')
     .replace(/\(\s*(Non-Demat|Demat|Advisor)[^)]*\)?/gi, '')
     .replace(/\s+-\s*$/, '')
@@ -167,8 +168,10 @@ export function parseCas(lines) {
       if (!SCHEME_START_RE.test(header) && i > 0 && SCHEME_START_RE.test(lines[i - 1]) && !FOLIO_RE.test(lines[i - 1])) header = `${lines[i - 1]} ${header}`;
       let im = header.match(ISIN_RE) || header.match(BARE_ISIN_RE);
       if (!im && lines[i + 1]) {
+        // The code can also start the next line with other text between it and its label:
+        // "… - ISIN: Registrar : CAMS" / "INF194K01Z85(Advisor: DIRECT)".
         const joined = `${header} ${lines[i + 1]}`;
-        im = joined.match(ISIN_RE);
+        im = joined.match(ISIN_RE) || lines[i + 1].match(BARE_ISIN_RE);
         if (im) i++;
       }
       if (im) {
