@@ -3,12 +3,12 @@
 // ETFs, preference shares, …) are listed as skipped.
 import { pdfLines } from './cas.js';
 
-const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const MONTH_NO = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
 const ISIN_ANY = /\b(IN[A-Z0-9]{9}\d)\b/;
 const EQUITY_ISIN = /^INE[A-Z0-9]{4}01[A-Z0-9]{3}$/; // company equity shares
-const NUM = /^\(?-?(?:[\d,]*\.\d+|[\d,]+)\)?$/;
+const NUMBER_RE = /^\(?-?(?:[\d,]*\.\d+|[\d,]+)\)?$/;
 const DATE = String.raw`(\d{1,2})[-/ ]([A-Za-z]{3,9}|\d{1,2})[-/ ](\d{4})`;
-const PERIOD_RE = new RegExp(String.raw`period\s+(?:from\s+)?${DATE}\s+(?:to|-)\s+${DATE}`, 'i');
+const STMT_PERIOD_RE = new RegExp(String.raw`period\s+(?:from\s+)?${DATE}\s+(?:to|-)\s+${DATE}`, 'i');
 const AS_ON_RE = new RegExp(String.raw`(?:as\s+on|statement\s+date\s*:?)\s+${DATE}`, 'i');
 const DP_CLIENT_RE = /DP\s*ID\s*:?\s*([A-Z0-9]+)\s*,?\s*Client\s*ID\s*:?\s*(\d+)/i;
 const BO_ID_RE = /BO\s*ID\s*:?\s*(\d{16})\b/i;
@@ -24,7 +24,7 @@ const SECTIONS = [
 ];
 
 const isoDate = (d, m, y) => {
-  const mm = /^\d+$/.test(m) ? +m : MONTHS[m.slice(0, 3).toLowerCase()];
+  const mm = /^\d+$/.test(m) ? +m : MONTH_NO[m.slice(0, 3).toLowerCase()];
   return mm ? `${y}-${String(mm).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null;
 };
 const num = (s) => (s.startsWith('(') ? -1 : 1) * +s.replace(/[(),]/g, '');
@@ -59,7 +59,7 @@ export function parseDematCas(lines) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!date) {
-      const pm = line.match(PERIOD_RE);
+      const pm = line.match(STMT_PERIOD_RE);
       if (pm) date = isoDate(pm[4], pm[5], pm[6]);
       else {
         const am = line.match(AS_ON_RE);
@@ -105,12 +105,12 @@ export function parseDematCas(lines) {
     const isin = im[1];
     // A row's numbers can sit on the line below its ISIN when the name wraps; gather up to 3 lines.
     let text = line.slice(im.index + isin.length);
-    let tokens = text.split(/\s+/).filter((t) => NUM.test(t));
+    let tokens = text.split(/\s+/).filter((t) => NUMBER_RE.test(t));
     for (let j = 1; tokens.length < 3 && j <= 3 && lines[i + j] && !ISIN_ANY.test(lines[i + j]); j++) {
       text += ' ' + lines[i + j];
-      tokens = text.split(/\s+/).filter((t) => NUM.test(t));
+      tokens = text.split(/\s+/).filter((t) => NUMBER_RE.test(t));
     }
-    const name = text.split(/\s+/).filter((t) => t && !NUM.test(t) && !/^[-–]+$/.test(t)).join(' ')
+    const name = text.split(/\s+/).filter((t) => t && !NUMBER_RE.test(t) && !/^[-–]+$/.test(t)).join(' ')
       .replace(/^[A-Z0-9&-]+\.(?:NSE|BSE)\s+/, '').trim();
     const h = holdingFromNumbers(tokens.map(num));
     if (section === 'mf' || isin.startsWith('INF')) { skipped.push({ isin, name, kind: 'Mutual fund / ETF' }); continue; }
