@@ -13,7 +13,7 @@ const casNum = (s) => (s.startsWith('(') ? -1 : 1) * +s.replace(/[(),]/g, '');
 export const normFolio = (s) => String(s).replace(/\s+/g, '').toUpperCase();
 
 // ---------- PDF -> lines of text ----------
-export async function pdfLines(data, password) {
+export async function pdfLines(data, password, passwordHint = 'the one you chose when requesting the statement') {
   const pdfjs = await import(`${PDFJS}pdf.min.mjs`);
   pdfjs.GlobalWorkerOptions.workerSrc ||= `${PDFJS}pdf.worker.min.mjs`;
   let doc;
@@ -21,7 +21,7 @@ export async function pdfLines(data, password) {
     doc = await pdfjs.getDocument({ data, password: password || undefined }).promise;
   } catch (e) {
     if (e?.name === 'PasswordException') {
-      throw new Error(password ? 'That password didn’t open the PDF. It’s the one you chose when requesting the statement.' : 'This PDF is password-protected. Enter the password you chose when requesting the statement.');
+      throw new Error(password ? `That password didn’t open the PDF. It’s ${passwordHint}.` : `This PDF is password-protected. Enter its password: ${passwordHint}.`);
     }
     throw new Error('Couldn’t open that file as a PDF.');
   }
