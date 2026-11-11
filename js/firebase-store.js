@@ -3,12 +3,17 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, arrayUnion,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { fetchScheme, searchSchemes, navOn, schemeCodeForIsin, needsNav } from './mf.js';
+import { loadSharePrices } from './prices.js';
 
-const COLS = ['members', 'portfolios', 'folios', 'holdings', 'schemes'];
+const COLS = ['members', 'portfolios', 'folios', 'holdings', 'schemes', 'demats', 'shares'];
+// Share collections added later: until firestore.rules allows them, treat them as empty
+// instead of locking everyone out.
+const OPTIONAL = new Set(['demats', 'shares']);
 const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || String(a.name || a.folioNo || '').localeCompare(String(b.name || b.folioNo || ''));
 
 export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
-  const data = { members: [], portfolios: [], folios: [], holdings: [], schemes: [], users: [] };
+  const data = { members: [], portfolios: [], folios: [], holdings: [], schemes: [], demats: [], shares: [], users: [] };
+  let prices = null, stockMeta = null, sharesBlocked = false;
   const loaded = new Set();
   let state = null;
   const listeners = new Set();
@@ -23,6 +28,11 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       folios: [...data.folios].sort(byOrder),
       holdings: data.holdings,
       schemes: data.schemes,
+      demats: [...data.demats].sort(byOrder),
+      shares: [...data.shares].sort(byOrder),
+      prices,
+      stockMeta,
+      sharesBlocked,
       users: [...data.users].sort((a, b) => a.id.localeCompare(b.id)),
       navDate: navDate || new Date().toISOString().slice(0, 10),
     };
@@ -39,9 +49,28 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
         loaded.add(name);
         rebuild();
       },
-      (err) => (err.code === 'permission-denied' ? onDenied(err) : onError(err)),
+      (err) => {
+        if (OPTIONAL.has(name) && err.code === 'permission-denied') {
+          console.warn(`No access to "${name}" yet: publish the new firestore.rules.`);
+          sharesBlocked = true;
+          loaded.add(name);
+          return rebuild();
+        }
+        return err.code === 'permission-denied' ? onDenied(err) : onError(err);
+      },
     );
   COLS.forEach(listen);
+
+  // Share prices and sector / market-cap data: files the daily GitHub job saves on this site.
+  async function refreshPrices() {
+    const got = await loadSharePrices();
+    if (got.prices) prices = got.prices;
+    if (got.meta) stockMeta = got.meta;
+    if (state) rebuild();
+  }
+  refreshPrices();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshPrices(); });
+  setInterval(refreshPrices, 60 * 60e3);
   if (isAdmin) {
     onSnapshot(collection(db, 'users'), (snap) => {
       data.users = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -106,6 +135,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       const b = writeBatch(db);
       b.delete(doc(db, 'portfolios', id));
       data.folios.filter((f) => f.portfolioId === id).forEach((f) => b.update(doc(db, 'folios', f.id), { portfolioId: null }));
+      data.shares.filter((s) => s.portfolioId === id).forEach((s) => b.update(doc(db, 'shares', s.id), { portfolioId: null }));
       save(b.commit());
     },
 
@@ -167,6 +197,42 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       b.delete(doc(db, 'folios', id));
       data.holdings.filter((h) => h.folioId === id).forEach((h) => b.delete(doc(db, 'holdings', h.id)));
       save(b.commit());
+    },
+
+    // ---------- shares ----------
+    async addDemat(d) {
+      const id = newId('demats');
+      await setDoc(doc(db, 'demats', id), { broker: d.broker || '', dpId: d.dpId || '', clientId: d.clientId || '', holderName: d.holderName || '', memberId: d.memberId || null, order: Date.now() });
+      return { id };
+    },
+    async addShare({ isin, dematId, portfolioId, txns, dividends = [] }) {
+      const id = newId('shares');
+      await setDoc(doc(db, 'shares', id), { isin, dematId, portfolioId: portfolioId || null, order: Date.now(), txns, dividends, sectorOverride: null });
+      return { id };
+    },
+    updateShare: (id, patch) => updateDoc(doc(db, 'shares', id), patch),
+    moveShare: (id, portfolioId) => save(updateDoc(doc(db, 'shares', id), { portfolioId })),
+    deleteShare: (id) => deleteDoc(doc(db, 'shares', id)),
+    // Demat CAS import. plan: { demats: [{ ref, broker, dpId, clientId, holderName, memberId }],
+    //   adds: [{ dematRef | dematId, isin, portfolioId, txns }], appends: [{ shareId, txns }] }
+    async importDemat(plan) {
+      const ids = {};
+      const commits = [];
+      let b = writeBatch(db), n = 0;
+      const op = (fn) => { fn(b); if (++n >= 450) { commits.push(b.commit()); b = writeBatch(db); n = 0; } };
+      plan.demats.forEach((d, i) => {
+        ids[d.ref] = newId('demats');
+        op((w) => w.set(doc(db, 'demats', ids[d.ref]), { broker: d.broker || '', dpId: d.dpId, clientId: d.clientId, holderName: d.holderName || '', memberId: d.memberId || null, order: Date.now() + i }));
+      });
+      plan.adds.forEach((a, i) => op((w) => w.set(doc(db, 'shares', newId('shares')), {
+        isin: a.isin, dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, order: Date.now() + i, txns: a.txns, dividends: [], sectorOverride: null,
+      })));
+      plan.appends.forEach((a) => {
+        const sh = data.shares.find((s) => s.id === a.shareId);
+        op((w) => w.update(doc(db, 'shares', a.shareId), { txns: [...(sh?.txns || []), ...a.txns] }));
+      });
+      commits.push(b.commit());
+      await Promise.all(commits);
     },
 
     setUser: (email, role) => setDoc(doc(db, 'users', email.toLowerCase()), { role, updatedAt: Date.now() }, { merge: true }),
