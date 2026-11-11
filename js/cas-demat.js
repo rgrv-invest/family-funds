@@ -23,13 +23,14 @@ const SECTIONS = [
   [/^\s*(corporate bonds|preference shares|government securities|money market|securitised|alternate investment|postal saving|national pension|zero coupon|debentures|bonds)\b/i, 'other'],
 ];
 
+const ACRONYMS = new Set(['icici', 'hdfc', 'sbi', 'iifl', 'idbi', 'idfc', 'jm', 'nsdl', 'cdsl', 'smc', 'ifl', 'bnp', 'hsbc', 'kfin', 'cams']);
 const isoDate = (d, m, y) => {
   const mm = /^\d+$/.test(m) ? +m : MONTH_NO[m.slice(0, 3).toLowerCase()];
   return mm ? `${y}-${String(mm).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null;
 };
 const num = (s) => (s.startsWith('(') ? -1 : 1) * +s.replace(/[(),]/g, '');
 const shortBroker = (b) => (b || '').replace(/\b(BROKING|SECURITIES|STOCK|BROKERS?|CAPITAL|SERVICES|INVESTMENTS?|PVT\.?|PRIVATE|LIMITED|LTD\.?|INDIA)\b\.?/gi, '').replace(/\s+/g, ' ').trim()
-  .toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  .toLowerCase().replace(/\b\w+/g, (w) => (ACRONYMS.has(w) ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)));
 
 // The share count is the number that closes count × price ≈ value (the last two numbers in a row).
 // NSDL rows print face value, shares, price, value; CDSL rows print the current balance and

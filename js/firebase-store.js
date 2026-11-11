@@ -13,7 +13,8 @@ const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || String(a.name || a.
 
 export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   const data = { members: [], portfolios: [], folios: [], holdings: [], schemes: [], demats: [], shares: [], users: [] };
-  let prices = null, stockMeta = null, sharesBlocked = false;
+  let prices = null, stockMeta = null;
+  const blocked = new Set(); // share collections the current rules refuse
   const loaded = new Set();
   let state = null;
   const listeners = new Set();
@@ -32,7 +33,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       shares: [...data.shares].sort(byOrder),
       prices,
       stockMeta,
-      sharesBlocked,
+      sharesBlocked: blocked.size > 0,
       users: [...data.users].sort((a, b) => a.id.localeCompare(b.id)),
       navDate: navDate || new Date().toISOString().slice(0, 10),
     };
@@ -46,13 +47,14 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       (snap) => {
         data[name] = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         if (name === 'schemes') data.schemes = data.schemes.map((s) => ({ code: s.id, ...s }));
+        blocked.delete(name);
         loaded.add(name);
         rebuild();
       },
       (err) => {
         if (OPTIONAL.has(name) && err.code === 'permission-denied') {
           console.warn(`No access to "${name}" yet: publish the new firestore.rules.`);
-          sharesBlocked = true;
+          blocked.add(name);
           loaded.add(name);
           return rebuild();
         }
