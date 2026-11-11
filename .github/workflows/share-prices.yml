@@ -1,0 +1,57 @@
+# Daily share prices: downloads NSE's end-of-day bhavcopy (BSE as fallback) into data/prices.json.
+# Runs on weekdays after market close, with a later retry in case NSE publishes late.
+# On a pull request that changes the script it only checks the download works (nothing is committed).
+name: Share prices
+
+on:
+  schedule:
+    - cron: '37 13 * * 1-5'   # 19:07 IST, Mon–Fri
+    - cron: '7 16 * * 1-5'    # 21:37 IST retry
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/share_prices.py
+      - .github/workflows/share-prices.yml
+
+permissions:
+  contents: write   # commit data/prices.json
+  pages: write      # ask GitHub Pages to republish the site
+
+concurrency:
+  group: share-prices
+  cancel-in-progress: false
+
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the download (pull request, nothing saved)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/share_prices.py --dry-run
+
+      - name: Download prices
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/share_prices.py
+
+      - name: Save if changed
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add data/prices.json
+          if git diff --cached --quiet; then
+            echo "No change in prices; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Share prices for $(python3 -c "import json;print(json.load(open('data/prices.json'))['date'])")"
+          git pull --rebase --quiet
+          git push
+          # Commits made by this workflow may not trigger a GitHub Pages rebuild on their own.
+          gh api --method POST "repos/${{ github.repository }}/pages/builds" > /dev/null \
+            && echo "Requested a GitHub Pages rebuild." \
+            || echo "Could not request a Pages rebuild (the site will update on the next push)."
