@@ -353,3 +353,4 @@ dialog.wide { width: min(640px, calc(100vw - 32px)); }
 .empty a { color: var(--accent); }
 .closed-note { margin: 10px 0 0; }
 @media (max-width: 760px) { .with-date .scheme { grid-template-columns: 1fr 1fr; } }
+.nowrap { white-space: nowrap; }

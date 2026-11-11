@@ -329,7 +329,7 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
             if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span>${bought}<span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
             const g = st.current - st.invested;
             return `<div class="scheme">
-              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · NAV ${fmtNav(sc.nav)}</small></span>
+              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · <span class="nowrap">NAV ${fmtNav(sc.nav)}${sc.navDate ? ` on ${date(sc.navDate)}` : ''}</span></small></span>
               ${bought}
               <span class="num" data-l="Units">${fmtUnits(st.units)}</span>
               <span class="num" data-l="Invested">${rupees(st.invested)}</span>
