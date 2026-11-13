@@ -7,6 +7,7 @@ import {
 } from './format.js';
 import { readCas, normFolio, txnKey } from './cas.js';
 import { readDematCas, planDematImport, dematWrites } from './cas-demat.js';
+import { readAxisFile, planAxisImport, axisWrites } from './axis.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const sidebar = $('#sidebar');
@@ -35,7 +36,7 @@ let session = { role: 'admin', email: '' };
 const canEdit = () => session.role !== 'viewer';
 const isAdmin = () => session.role === 'admin';
 const ifEdit = (html) => (canEdit() ? html : '');
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const plural = (n, w, many = `${w}s`) => `${n} ${n === 1 ? w : many}`;
 const ROLE_LABEL = { admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
 
 export function start(s, sess) {
@@ -64,7 +65,7 @@ const unassigned = (s) => openFolios(s, unassignedAll(s));
 
 // ---------- shares: helpers and the All · Mutual funds · Shares switch ----------
 const dematById = (s, id) => s.demats.find((d) => d.id === id);
-const dematLabel = (d) => (d ? `${d.broker || 'Demat'} ··${String(d.clientId || d.dpId || '').slice(-4)}` : 'Demat');
+const dematLabel = (d) => (d ? `${d.broker || 'Demat'} ··${String(d.clientId || d.brokerClientId || d.dpId || '').slice(-4)}` : 'Demat');
 const heldShares = (sh) => sh.filter(shareHeld);
 const unassignedShares = (s) => s.shares.filter((x) => !x.portfolioId || !portfolioById(s, x.portfolioId));
 const soldShares = (s) => s.shares.filter((x) => !shareHeld(x) && (x.txns || []).length);
@@ -933,7 +934,7 @@ function addShareDialog(portfolioId) {
       }
       const have = s.shares.find((x) => x.dematId === dematId && x.isin === d.isin);
       if (have) return 'This share is already in that demat account. Use “Edit” on it to add a transaction.';
-      await store.addShare({ isin: d.isin, dematId, portfolioId: d.portfolioId || null,
+      await store.addShare({ isin: d.isin, name: shareInfo(s, { isin: d.isin }).name, dematId, portfolioId: d.portfolioId || null,
         txns: [{ date: d.date || null, qty: +d.qty, price: d.price === '' ? null : +d.price, kind: 'opening' }] });
       toast(`Added ${shareInfo(s, { isin: d.isin }).name}`);
     },
@@ -1109,7 +1110,11 @@ function importCasDialog(portfolioId) {
       pw: 'The one you set when requesting it', saved: 'Only folios and transactions are saved.' },
     shares: { text: 'Upload the Consolidated Account Statement (PDF) from <b>NSDL</b> (nsdl.co.in) or <b>CDSL</b> (cdslindia.com). It lists the shares in each of your demat accounts.',
       pw: 'Usually your PAN in capitals, e.g. ABCDE1234F', saved: 'Only demat accounts and share quantities are saved.' },
+    axis: { text: 'From Axis Direct, download the <b>Portfolio Holding Statement</b> and, for purchase dates, sales and dividends, the <b>PAN Level Transaction Report</b>. Run both from the day the account was opened up to today.',
+      pw: 'Usually the PAN in capitals, e.g. ABCDE1234F', saved: 'Only shares, quantities, average costs, trades and dividends are saved.' },
   };
+  const LABEL = { mf: 'Statement (PDF)', shares: 'Statement (PDF)', axis: 'Portfolio Holding Statement (.xlsx)' };
+  const ACCEPT = { mf: 'application/pdf,.pdf', shares: 'application/pdf,.pdf', axis: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel' };
   openDialog({
     title: 'Import from CAS',
     submit: 'Read statement',
@@ -1117,29 +1122,42 @@ function importCasDialog(portfolioId) {
       <div class="field">What’s in the statement?
         <div class="seg seg-wide" role="radiogroup">
           <label><input type="radio" name="kind" value="mf" checked> Mutual funds <small>CAMS / KFintech</small></label>
+          <label><input type="radio" name="kind" value="axis"> Shares <small>Axis Direct</small></label>
           <label><input type="radio" name="kind" value="shares"> Shares <small>NSDL / CDSL</small></label>
         </div>
       </div>
       <p class="hint kind-help" style="margin:0">${help.mf.text}</p>
-      <label class="field">Statement (PDF)<input type="file" name="file" accept="application/pdf,.pdf" required></label>
-      <label class="field">PDF password<input type="password" name="password" autocomplete="off" placeholder="${help.mf.pw}"></label>
-      <p class="hint" style="margin:0">The PDF is read in your browser and isn’t uploaded. <span class="kind-saved">${help.mf.saved}</span></p>
+      <label class="field"><span class="file-label">${LABEL.mf}</span><input type="file" name="file" accept="${ACCEPT.mf}" required></label>
+      <label class="field file2" hidden>PAN Level Transaction Report (.xlsx, optional)<input type="file" name="file2" accept="${ACCEPT.axis}"></label>
+      <label class="field">Password<input type="password" name="password" autocomplete="off" placeholder="${help.mf.pw}"></label>
+      <p class="hint" style="margin:0">Files are read in your browser and aren’t uploaded. <span class="kind-saved">${help.mf.saved}</span></p>
       <p class="cas-status" aria-live="polite" hidden></p>`,
     onOpen: (form) => {
       form.addEventListener('change', (e) => {
         if (e.target.name !== 'kind') return;
-        const h = help[e.target.value];
+        const k = e.target.value, h = help[k];
         form.querySelector('.kind-help').innerHTML = h.text;
         form.querySelector('[name=password]').placeholder = h.pw;
         form.querySelector('.kind-saved').textContent = h.saved;
+        form.querySelector('.file-label').textContent = LABEL[k];
+        form.querySelector('[name=file]').accept = ACCEPT[k];
+        form.querySelector('.file2').hidden = k !== 'axis';
       });
     },
     onSubmit: async (d, form) => {
       const status = form.querySelector('.cas-status');
       const say = (msg) => { status.hidden = false; status.textContent = msg; };
-      if (!d.file?.size) return 'Choose the statement PDF.';
+      if (!d.file?.size) return d.kind === 'axis' ? 'Choose the Portfolio Holding Statement.' : 'Choose the statement PDF.';
       try {
         say('Reading the statement…');
+        if (d.kind === 'axis') {
+          const files = [await readAxisFile(d.file, d.password.trim())];
+          if (d.file2?.size) files.push(await readAxisFile(d.file2, d.password.trim()));
+          const holdings = files.find((f) => f.kind === 'holdings'), trades = files.find((f) => f.kind === 'trades');
+          if (!holdings) return 'One of the files needs to be the Portfolio Holding Statement (the transaction report alone isn’t enough).';
+          const plan = planAxisImport({ holdings, trades }, store.get());
+          return () => reviewAxisDialog(plan, portfolioId);
+        }
         if (d.kind === 'shares') {
           const cas = await readDematCas(d.file, d.password.trim());
           return () => reviewDematDialog(cas, portfolioId);
@@ -1270,9 +1288,11 @@ function reviewCasDialog(cas, rows, portfolioId) {
 }
 
 // ---------- NSDL / CDSL statement review ----------
-function reviewDematDialog(cas, portfolioId) {
+function reviewDematDialog(cas, portfolioId, links = {}) {
   const s = store.get();
-  const plan = planDematImport(cas, s);
+  const plan = planDematImport(cas, s, links);
+  // Tracked accounts without a DP ID (added from Axis Direct reports) that a statement account could be.
+  const linkable = s.demats.filter((d) => !d.dpId);
   const STATUS = { new: 'New', same: 'No change', missing: 'Not in this statement' };
   const change = (r) => `${fmtUnits(r.before)} → ${fmtUnits(r.qty)} (${r.diff > 0 ? '+' : '−'}${fmtUnits(Math.abs(r.diff))})`;
   const nActions = plan.reduce((a, p) => a + p.rows.filter((r) => r.status !== 'same').length, 0);
@@ -1316,7 +1336,8 @@ function reviewDematDialog(cas, portfolioId) {
     const a = p.account;
     return `<section class="dm-acct">
       <div class="dm-acct-h"><b>${esc(a.brokerShort || a.broker || 'Demat account')}</b> <span class="muted">DP ${esc(a.dpId)} · Client ${esc(a.clientId)}${a.holders.length ? ` · ${esc(a.holders.join(', '))}` : ''}</span>
-        <span class="chip">${p.demat ? 'Already tracked' : 'New demat account'}</span></div>
+        <span class="chip">${p.linked ? `Linked to ${esc(dematLabel(p.demat))}` : p.demat ? 'Already tracked' : 'New demat account'}</span></div>
+      ${(!p.demat || p.linked) && linkable.length ? `<label class="field">Already in the tracker as<select name="link-${ai}"><option value="">— no, it’s a new account —</option>${linkable.map((d) => `<option value="${d.id}" ${links[ai] === d.id ? 'selected' : ''}>${esc(dematLabel(d))}${d.holderName ? ` · ${esc(d.holderName)}` : ''}</option>`).join('')}</select></label>` : ''}
       ${p.demat ? '' : `<label class="field">Whose demat account is this?<select name="member-${ai}">${memberOptions(s, guessMember(a))}</select></label>`}
       ${p.rows.length ? p.rows.map((r, ri) => rowHtml(ai, r, ri)).join('') : '<p class="hint" style="margin:0">No shares in this account.</p>'}
     </section>`;
@@ -1326,15 +1347,21 @@ function reviewDematDialog(cas, portfolioId) {
       <p>Mutual funds come in through the CAMS / KFintech statement instead.</p></details>` : '';
   openDialog({
     title: 'Review share import',
-    submit: nActions ? 'Import' : 'Done',
+    submit: nActions || plan.some((p) => p.linked) ? 'Import' : 'Done',
     wide: true,
     body: `
       <p class="hint" style="margin:0">${cas.date ? `Statement as on ${date(cas.date)} · ` : ''}${plural(plan.length, 'demat account')} · ${plural(plan.reduce((a, p) => a + p.rows.filter((r) => r.status !== 'missing').length, 0), 'share')}.
         ${nActions ? 'Quantities are compared with the tracker; re-importing the same statement changes nothing.' : 'Everything in this statement already matches the tracker.'}</p>
       ${skipped}
       <div class="cas-list">${plan.map(acctHtml).join('')}</div>`,
+    onOpen: (form) => form.addEventListener('change', (e) => {
+      const m = e.target.name?.match(/^link-(\d+)$/);
+      if (!m) return;
+      dialog.close(); // redo the matching against the chosen account
+      reviewDematDialog(cas, portfolioId, { ...links, [m[1]]: e.target.value || undefined });
+    }),
     onSubmit: async (d) => {
-      if (!nActions) return;
+      if (!nActions && !plan.some((p) => p.linked)) return;
       const choices = {};
       plan.forEach((p, ai) => p.rows.forEach((r, ri) => {
         const k = `${ai}-${ri}`;
@@ -1347,9 +1374,79 @@ function reviewDematDialog(cas, portfolioId) {
       const missingMember = plan.findIndex((p, ai) => !p.demat && p.rows.some((r, ri) => choices[`${ai}:${ri}`].include && r.status === 'new') && !d[`member-${ai}`]);
       if (missingMember >= 0) return `Choose whose demat account ${plan[missingMember].account.clientId} is.`;
       const w = dematWrites(plan, choices, { date: cas.date || todayIso(), memberFor: (ai) => d[`member-${ai}`] });
-      if (!w.demats.length && !w.adds.length && !w.appends.length) return 'Nothing selected to import.';
+      if (!w.demats.length && !w.dematUpdates.length && !w.adds.length && !w.appends.length) return 'Nothing selected to import.';
       await store.importDemat(w);
       toast(`Imported ${plural(w.adds.length, 'new share')}${w.appends.length ? ` · ${plural(w.appends.length, 'change')}` : ''}${w.demats.length ? ` · ${plural(w.demats.length, 'demat account')}` : ''}`);
+    },
+  });
+}
+
+// ---------- Axis Direct review ----------
+function reviewAxisDialog(plan, portfolioId) {
+  const s = store.get();
+  const a = plan.account;
+  const avg = (txns) => shareStats({ txns }, null, null).avgPrice;
+  const nActions = plan.rows.filter((r) => r.status !== 'same').length;
+  const noDate = plan.rows.filter((r) => r.status !== 'missing' && r.qty > 0 && r.txns.some((t) => t.kind === 'opening' && !t.date)).length;
+  const words = new Set(a.name.toLowerCase().split(/\s+/));
+  const guess = s.members.find((m) => m.name.toLowerCase().split(/\s+/).some((w) => words.has(w)))?.id || (portfolioId && portfolioById(s, portfolioId)?.memberId) || '';
+  const rowHtml = (r, i) => {
+    const name = esc(r.name || shareInfo(s, { isin: r.isin }).name);
+    const notes = [];
+    if (r.price == null && r.qty > 0) notes.push('No price in the price file yet, so it won’t be valued.');
+    let tag = '', what = '', controls = '';
+    if (r.status === 'new') {
+      tag = r.qty > 0 ? 'New' : 'New · sold';
+      what = r.qty > 0 ? `${fmtUnits(r.qty)} shares · avg ${avg(r.txns) != null ? fmtNav(avg(r.txns)) : '—'}` : `held ${fmtUnits(r.held)} on ${date(a.asOf)}, sold since`;
+      controls = `<div class="dm-ctrl"><label>Portfolio<select name="pf-${i}">${portfolioOptions(s, portfolioId)}</select></label></div>`;
+    } else if (r.status === 'changed') {
+      const o = avg(r.share.txns || []), n = avg(r.txns);
+      tag = r.oldQty !== r.qty ? `${fmtUnits(r.oldQty)} → ${fmtUnits(r.qty)}` : 'Updated';
+      what = [o != null && n != null && Math.abs(o - n) > 0.005 ? `avg ${fmtNav(o)} → ${fmtNav(n)}` : '', r.newDividends > 0 ? `${plural(r.newDividends, 'new dividend')}` : ''].filter(Boolean).join(' · ');
+    } else if (r.status === 'same') { tag = 'No change'; what = `${fmtUnits(r.qty)} shares`; }
+    else if (r.status === 'missing') {
+      tag = 'Not in these files';
+      controls = `<div class="dm-ctrl"><label class="inline"><input type="checkbox" name="sold-${i}"> Sold all ${fmtUnits(r.oldQty)} (record a sale)</label></div>`;
+    }
+    const dividends = r.status === 'new' && r.dividends?.length ? ` · ${plural(r.dividends.length, 'dividend')}` : '';
+    return `<div class="dm-row ${r.status === 'changed' ? 'up' : r.status}">
+      <div class="dm-main">${r.status === 'new' || r.status === 'changed' ? `<input type="checkbox" name="inc-${i}" checked aria-label="Import ${name}">` : '<span></span>'}
+        <div><b>${name}</b> <span class="muted">${esc(r.isin)}</span> <span class="chip ${r.status === 'changed' ? 'up' : r.status}">${tag}</span>
+          ${what || dividends ? `<span class="muted">· ${what}${dividends}</span>` : ''}
+          ${notes.map((n) => `<small class="warn-text">${esc(n)}</small>`).join('')}
+          ${controls}</div></div></div>`;
+  };
+  const extra = [
+    plan.unmatched.length ? `Couldn’t identify ${plan.unmatched.map(esc).join(', ')} in the trade report; ${plan.unmatched.length === 1 ? 'it was' : 'they were'} skipped. Add ${plan.unmatched.length === 1 ? 'it' : 'them'} with “+ Add share”.` : '',
+    plan.other.length ? `${plural(plan.other.length, 'other entry', 'other entries')} in the trade report (${[...new Set(plan.other.map((o) => esc(o.what)))].join(', ')}) ${plan.other.length === 1 ? 'was' : 'were'} skipped.` : '',
+    noDate ? `${plural(noDate, 'share')} ${noDate === 1 ? 'has' : 'have'} no purchase date, so XIRR shows “—” for ${noDate === 1 ? 'it' : 'them'}. Run the transaction report from the day the account was opened to fill these in, or add dates later (Edit → Edit buy price / first bought).` : '',
+  ].filter(Boolean);
+  openDialog({
+    title: 'Review Axis Direct import',
+    submit: nActions ? 'Import' : 'Done',
+    wide: true,
+    body: `
+      <section class="dm-acct">
+        <div class="dm-acct-h"><b>Axis Direct</b> <span class="muted">client ${esc(a.clientId)}${a.name ? ` · ${esc(a.name)}` : ''}</span>
+          <span class="chip">${plan.demat ? 'Already tracked' : 'New account'}</span></div>
+        <p class="hint" style="margin:0">Holdings as on ${a.asOf ? date(a.asOf) : '—'}${a.tradesFrom ? ` · trades ${date(a.tradesFrom)} – ${date(a.tradesTo)}` : ' · no trade report'}.
+          ${nActions ? 'Average costs come from Axis; trades after the holdings date are added on top. Importing the same files again changes nothing.' : 'Everything in these files already matches the tracker.'}</p>
+        ${plan.demat ? '' : `<label class="field">Whose account is this?<select name="member">${memberOptions(s, guess)}</select></label>`}
+        ${plan.rows.filter((r) => r.status === 'new').length > 1 ? `<label class="field">Put all new shares in<select class="pf-all">${portfolioOptions(s, portfolioId)}</select></label>` : ''}
+        ${extra.map((x) => `<p class="notice" style="margin:0">${x}</p>`).join('')}
+        ${plan.rows.map(rowHtml).join('')}
+      </section>`,
+    onOpen: (form) => form.querySelector('.pf-all')?.addEventListener('change', (e) => {
+      form.querySelectorAll('select[name^="pf-"]').forEach((sel) => { sel.value = e.target.value; });
+    }),
+    onSubmit: async (d) => {
+      if (!nActions) return;
+      const choices = plan.rows.map((r, i) => ({ include: r.status === 'new' || r.status === 'changed' ? !!d[`inc-${i}`] : true, portfolioId: d[`pf-${i}`] || null, sellAll: !!d[`sold-${i}`] }));
+      if (!plan.demat && plan.rows.some((r, i) => r.status === 'new' && choices[i].include) && !d.member) return 'Choose whose account this is.';
+      const w = axisWrites(plan, choices, { memberId: d.member, today: todayIso() });
+      if (!w.adds.length && !w.replaces.length && !w.appends.length) return 'Nothing selected to import.';
+      await store.importDemat(w);
+      toast(`Imported ${plural(w.adds.length, 'new share')}${w.replaces.length ? ` · ${plural(w.replaces.length, 'update')}` : ''}${w.appends.length ? ` · ${plural(w.appends.length, 'sale')}` : ''}`);
     },
   });
 }

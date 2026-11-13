@@ -105,8 +105,8 @@ portfolios/{id}  { memberId, name, order }
 folios/{id}      { folioNo, amc, holder, portfolioId|null, order }   // holder shown = the portfolio's member; saved on move, kept when unassigned
 holdings/{id}    { folioId, schemeCode, txns: [{ date: 'YYYY-MM-DD', amount, units }] }   // redemptions: negative amount & units
 schemes/{code}   { code, name, amc, assetClass, category, amfiCategory, isin, nav, navDate, checkedOn }
-demats/{id}      { broker, dpId, clientId, holderName, memberId|null, order }
-shares/{id}      { isin, dematId, portfolioId|null, order, sectorOverride|null,
+demats/{id}      { broker, dpId, clientId, brokerClientId|null, holderName, memberId|null, order }   // Axis accounts: brokerClientId
+shares/{id}      { isin, name, dematId, portfolioId|null, order, sectorOverride|null,   // name: as in the import, if the price file lacks it
                    txns: [{ date|null, qty, price|null, kind }],   // kind: buy | sell | bonus | split | opening; sells: negative qty
                    dividends: [{ date, amount }] }
 users/{email}    { role, updatedAt }

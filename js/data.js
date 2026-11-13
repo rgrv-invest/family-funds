@@ -215,12 +215,15 @@ export const sampleStore = {
   async importDemat(plan) {
     const ids = {};
     const demats = [...state.demats, ...plan.demats.map((d) => { ids[d.ref] = id('d'); const { ref, ...rest } = d; return { id: ids[d.ref], ...rest }; })];
+    const updated = demats.map((d) => { const u = (plan.dematUpdates || []).find((x) => x.dematId === d.id); return u ? { ...d, ...u.patch } : d; });
     let shares = state.shares.map((s) => {
+      const rep = (plan.replaces || []).find((r) => r.shareId === s.id);
       const add = plan.appends.filter((a) => a.shareId === s.id).flatMap((a) => a.txns);
-      return add.length ? { ...s, txns: [...s.txns, ...add] } : s;
+      const base = rep ? { ...s, txns: rep.txns, dividends: rep.dividends || [] } : s;
+      return add.length ? { ...base, txns: [...base.txns, ...add] } : base;
     });
-    shares = [...shares, ...plan.adds.map((a) => ({ id: id('s'), isin: a.isin, dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, txns: a.txns, dividends: [], sectorOverride: null }))];
-    commit({ demats, shares });
+    shares = [...shares, ...plan.adds.map((a) => ({ id: id('s'), isin: a.isin, name: a.name || '', dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, txns: a.txns, dividends: a.dividends || [], sectorOverride: null }))];
+    commit({ demats: updated, shares });
   },
   moveFolio(folioId, portfolioId, holder) {
     commit({ folios: state.folios.map((f) => (f.id === folioId ? { ...f, portfolioId, ...(holder ? { holder } : {}) } : f)) });

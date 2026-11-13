@@ -1,3 +1,4 @@
 # Extra ISINs to include in data/prices.json even though they aren't company shares
 # (for example an ETF or REIT held in a demat account). One ISIN per line; text after # is ignored.
 # The daily job picks these up from its next run.
+INF109KB15Y7  # Bharat 22 ETF (held in an Axis Direct account)

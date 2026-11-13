@@ -140,10 +140,14 @@ const qtyOf = (sh) => (sh.txns || []).reduce((a, t) => a + t.qty, 0);
 
 // For each demat account in the statement: the tracked demat (by DP ID + client ID) and one row per
 // share: 'new', 'same', 'up' / 'down' (quantity change) or 'missing' (tracked but not in the statement).
-export function planDematImport(cas, state) {
+// links: { accountIndex: dematId } ties a statement account to a tracked one that has no DP ID yet
+// (an account added from Axis Direct reports, say), so its shares aren't counted twice.
+export function planDematImport(cas, state, links = {}) {
   const priceOf = (isin) => state.prices?.p?.[isin]?.[0] ?? null;
-  return cas.accounts.map((a) => {
-    const demat = state.demats.find((d) => d.dpId === a.dpId && d.clientId === a.clientId) || null;
+  return cas.accounts.map((a, ai) => {
+    const matched = state.demats.find((d) => d.dpId === a.dpId && d.clientId === a.clientId) || null;
+    const linked = !matched && links[ai] ? state.demats.find((d) => d.id === links[ai]) || null : null;
+    const demat = matched || linked;
     const tracked = demat ? state.shares.filter((s) => s.dematId === demat.id) : [];
     const rows = a.equities.map((e) => {
       const share = tracked.find((s) => s.isin === e.isin) || null;
@@ -157,15 +161,16 @@ export function planDematImport(cas, state) {
       const before = qtyOf(s);
       if (!seen.has(s.isin) && before > 0) rows.push({ isin: s.isin, name: '', qty: 0, before, diff: -before, status: 'missing', share: s, price: priceOf(s.isin) });
     }
-    return { account: a, demat, rows };
+    return { account: a, demat, linked: !!linked, rows };
   });
 }
 
 // Turn the reviewed plan into store writes. choices[rowKey] carries the reviewer's answers:
 // { include, price, firstBought, portfolioId, increase: 'buy' | 'bonus', sellAll }.
 export function dematWrites(plan, choices, { date, memberFor }) {
-  const out = { demats: [], adds: [], appends: [] };
+  const out = { demats: [], dematUpdates: [], adds: [], appends: [] };
   plan.forEach((p, ai) => {
+    if (p.linked) out.dematUpdates.push({ dematId: p.demat.id, patch: { dpId: p.account.dpId, clientId: p.account.clientId } });
     const ref = `new${ai}`;
     const dematId = p.demat?.id || null;
     let used = false;
@@ -174,7 +179,7 @@ export function dematWrites(plan, choices, { date, memberFor }) {
       if (c.include === false) return;
       const price = c.price === '' || c.price == null ? null : +c.price;
       if (r.status === 'new') {
-        out.adds.push({ dematId, dematRef: dematId ? null : ref, isin: r.isin, portfolioId: c.portfolioId || null,
+        out.adds.push({ dematId, dematRef: dematId ? null : ref, isin: r.isin, name: r.name || '', portfolioId: c.portfolioId || null,
           txns: [{ date: c.firstBought || null, qty: r.qty, price, kind: 'opening' }] });
         used = true;
       } else if (r.status === 'up') {

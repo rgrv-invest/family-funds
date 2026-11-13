@@ -15,7 +15,7 @@ export function axisDate(v) {
   const mm = /^\d+$/.test(m[2]) ? +m[2] : MON[m[2].slice(0, 3).toLowerCase()];
   return mm ? `${m[3]}-${String(mm).padStart(2, '0')}-${m[1].padStart(2, '0')}` : null;
 }
-const num = (v) => (typeof v === 'number' ? v : +String(v ?? '').replace(/,/g, ''));
+const toNum = (v) => (typeof v === 'number' ? v : +String(v ?? '').replace(/,/g, ''));
 const cell = (row, i) => (i >= 0 ? row[i] : undefined);
 
 // Label/value pairs above the table ("Client ID", "Client Name", "Date", "From Date", …).
@@ -48,8 +48,8 @@ export function parseAxisWorkbook(sheets) {
       for (const r of h.body) {
         const isin = String(cell(r, c.isin) ?? '').trim();
         if (!/^IN[A-Z0-9]{9}\d$/.test(isin)) continue;
-        const qty = num(cell(r, c.qty)), inv = num(cell(r, c.inv)), avg = num(cell(r, c.avg));
-        out.push({ name: String(cell(r, c.name) ?? '').trim(), isin, qty, invested: isFinite(inv) && inv > 0 ? inv : isFinite(avg) ? avg * qty : null, avgCost: isFinite(avg) ? avg : null, marketPrice: num(cell(r, c.price)) || null });
+        const qty = toNum(cell(r, c.qty)), inv = toNum(cell(r, c.inv)), avg = toNum(cell(r, c.avg));
+        out.push({ name: String(cell(r, c.name) ?? '').trim(), isin, qty, invested: isFinite(inv) && inv > 0 ? inv : isFinite(avg) ? avg * qty : null, avgCost: isFinite(avg) ? avg : null, marketPrice: toNum(cell(r, c.price)) || null });
       }
       return { kind: 'holdings', clientId, name, asOf: axisDate(m['to date'] ?? m.date ?? m['as on date'] ?? m['as on']), from: axisDate(m['from date']), rows: out };
     }
@@ -60,11 +60,11 @@ export function parseAxisWorkbook(sheets) {
       const trades = [], dividends = [], other = [];
       for (const r of t.body) {
         const date = axisDate(cell(r, c.date)), nm = String(cell(r, c.name) ?? '').trim(), side = String(cell(r, c.side) ?? '').trim().toUpperCase();
-        const qty = num(cell(r, c.qty)), price = num(cell(r, c.price)), value = num(cell(r, c.value));
+        const qty = toNum(cell(r, c.qty)), price = toNum(cell(r, c.price)), value = toNum(cell(r, c.value));
         if (!date || !nm || !side) continue;
         if (side === 'BUY' || side === 'SELL') {
           // Axis's average cost includes brokerage, GST and stamp duty but not STT; match it for buys.
-          const charges = [c.brk, c.gst, c.other].reduce((a, i) => a + (num(cell(r, i)) || 0), 0);
+          const charges = [c.brk, c.gst, c.other].reduce((a, i) => a + (toNum(cell(r, i)) || 0), 0);
           trades.push({ date, name: nm, side, qty, price, cost: side === 'BUY' ? (value + charges) / qty : price });
         } else if (/DIVIDEND/.test(side)) dividends.push({ date, name: nm, amount: value });
         else other.push({ date, name: nm, what: side, qty });
@@ -87,7 +87,7 @@ const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9& ]/g, ' 
 const r4 = (x) => Math.round(x * 1e4) / 1e4;
 const sameTxns = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sortTx = (t) => [...t].sort((x, y) => (x.date || '').localeCompare(y.date || '') || y.qty - x.qty);
-const qtyOf = (txns) => txns.reduce((a, t) => a + t.qty, 0);
+const txnQty = (txns) => txns.reduce((a, t) => a + t.qty, 0);
 
 // Names in the trade report -> ISIN: the holding statement's names first, then the price list.
 function isinLookup(holdings, state) {
@@ -147,7 +147,7 @@ export function planAxisImport({ holdings, trades }, state) {
     const newTxns = sortTx(txns);
     const divs = [...(share?.dividends || []), ...(divsBy.get(isin) || [])];
     const dividends = [...new Map(divs.map((d) => [`${d.date}|${r4(d.amount)}`, { date: d.date, amount: r4(d.amount) }])).values()].sort((a, b) => a.date.localeCompare(b.date));
-    const qty = qtyOf(newTxns), oldQty = share ? qtyOf(share.txns || []) : 0;
+    const qty = txnQty(newTxns), oldQty = share ? txnQty(share.txns || []) : 0;
     const status = !share ? 'new' : sameTxns(sortTx(share.txns || []), newTxns) && sameTxns(share.dividends || [], dividends) ? 'same' : 'changed';
     if (!share && !newTxns.length) return []; // bought and sold before the statement date: nothing held to record
     const name = h?.name || ts[0]?.name || isin;
@@ -156,7 +156,7 @@ export function planAxisImport({ holdings, trades }, state) {
   });
   // Tracked in this account but in neither file: offered as "sold all".
   for (const s of tracked) {
-    if (!isins.includes(s.isin) && qtyOf(s.txns || []) > 0) rows.push({ isin: s.isin, name: '', status: 'missing', share: s, qty: 0, oldQty: qtyOf(s.txns), price: state.prices?.p?.[s.isin]?.[0] ?? null });
+    if (!isins.includes(s.isin) && txnQty(s.txns || []) > 0) rows.push({ isin: s.isin, name: '', status: 'missing', share: s, qty: 0, oldQty: txnQty(s.txns), price: state.prices?.p?.[s.isin]?.[0] ?? null });
   }
   return { account: { clientId: holdings.clientId, name: holdings.name || trades?.name || '', asOf, tradesFrom: trades?.from, tradesTo: trades?.to }, demat, rows,
     unmatched: [...unmatched], other: trades?.other || [] };
@@ -169,7 +169,7 @@ export function axisWrites(plan, choices, { memberId, today }) {
   plan.rows.forEach((r, i) => {
     const c = choices[i] || {};
     if (c.include === false || r.status === 'same') return;
-    if (r.status === 'new') out.adds.push({ dematId, dematRef: dematId ? null : ref, isin: r.isin, portfolioId: c.portfolioId || null, txns: r.txns, dividends: r.dividends });
+    if (r.status === 'new') out.adds.push({ dematId, dematRef: dematId ? null : ref, isin: r.isin, name: r.name, portfolioId: c.portfolioId || null, txns: r.txns, dividends: r.dividends });
     else if (r.status === 'changed') out.replaces.push({ shareId: r.share.id, txns: r.txns, dividends: r.dividends });
     else if (r.status === 'missing' && c.sellAll) out.appends.push({ shareId: r.share.id, txns: [{ date: plan.account.asOf || today, qty: -r.oldQty, price: null, kind: 'sell' }] });
   });

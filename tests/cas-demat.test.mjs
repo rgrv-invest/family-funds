@@ -98,7 +98,7 @@ test('import: new, no change, increase, decrease, missing; re-import changes not
   assert.ok(plan.every((p) => p.demat), 'demats matched by DP ID + client ID');
   assert.deepEqual(plan.flatMap((p) => p.rows.map((r) => r.status)), ['same', 'same', 'same', 'same']);
   w = dematWrites(plan, {}, { date: cas.date, memberFor: () => null });
-  assert.deepEqual(w, { demats: [], adds: [], appends: [] });
+  assert.deepEqual(w, { demats: [], dematUpdates: [], adds: [], appends: [] });
 
   // Next month: Reliance 60 → 75 (bonus), HDFC Bank 200 → 150, Infosys gone.
   const next = NSDL.map((l) => l
@@ -124,7 +124,7 @@ test('import: new, no change, increase, decrease, missing; re-import changes not
   // ...and importing that statement again changes nothing.
   plan = planDematImport(cas2, state);
   assert.deepEqual(plan[0].rows.map((r) => r.status), ['same', 'same']);
-  assert.deepEqual(dematWrites(plan, {}, { date: cas2.date, memberFor: () => null }), { demats: [], adds: [], appends: [] });
+  assert.deepEqual(dematWrites(plan, {}, { date: cas2.date, memberFor: () => null }), { demats: [], dematUpdates: [], adds: [], appends: [] });
 });
 
 test('"Bought more" with a price records a buy at that price', () => {
@@ -133,4 +133,17 @@ test('"Bought more" with a price records a buy at that price', () => {
   assert.equal(plan[0].rows[0].status, 'up');
   const w = dematWrites(plan, { '0:0': { increase: 'buy', price: '1300' } }, { date: '2026-10-31', memberFor: () => null });
   assert.deepEqual(w.appends[0].txns, [{ date: '2026-10-31', qty: 10, price: 1300, kind: 'buy' }]);
+});
+
+test('a statement account can be linked to an account added from Axis reports', () => {
+  const state = { demats: [{ id: 'ax', broker: 'Axis Direct', brokerClientId: '1234567', dpId: '', clientId: '' }],
+    shares: [{ id: 's1', isin: 'INE002A01018', dematId: 'ax', txns: [{ date: null, qty: 60, price: 900, kind: 'opening' }] }], prices: { p: {} } };
+  const cas = parseDematCas(NSDL.slice(0, 9));
+  assert.equal(planDematImport(cas, state)[0].demat, null); // not linked: looks like a new account
+  const plan = planDematImport(cas, state, { 0: 'ax' });
+  assert.equal(plan[0].demat.id, 'ax');
+  assert.deepEqual(plan[0].rows.map((r) => r.status), ['same']); // Reliance 60 is already there
+  const w = dematWrites(plan, {}, { date: cas.date, memberFor: () => null });
+  assert.deepEqual(w.dematUpdates, [{ dematId: 'ax', patch: { dpId: 'IN303028', clientId: '12345678' } }]);
+  assert.deepEqual([w.demats, w.adds, w.appends], [[], [], []]);
 });

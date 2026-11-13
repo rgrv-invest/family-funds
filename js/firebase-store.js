@@ -207,16 +207,19 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       await setDoc(doc(db, 'demats', id), { broker: d.broker || '', dpId: d.dpId || '', clientId: d.clientId || '', holderName: d.holderName || '', memberId: d.memberId || null, order: Date.now() });
       return { id };
     },
-    async addShare({ isin, dematId, portfolioId, txns, dividends = [] }) {
+    async addShare({ isin, name = '', dematId, portfolioId, txns, dividends = [] }) {
       const id = newId('shares');
-      await setDoc(doc(db, 'shares', id), { isin, dematId, portfolioId: portfolioId || null, order: Date.now(), txns, dividends, sectorOverride: null });
+      await setDoc(doc(db, 'shares', id), { isin, name, dematId, portfolioId: portfolioId || null, order: Date.now(), txns, dividends, sectorOverride: null });
       return { id };
     },
     updateShare: (id, patch) => updateDoc(doc(db, 'shares', id), patch),
     moveShare: (id, portfolioId) => save(updateDoc(doc(db, 'shares', id), { portfolioId })),
     deleteShare: (id) => deleteDoc(doc(db, 'shares', id)),
-    // Demat CAS import. plan: { demats: [{ ref, broker, dpId, clientId, holderName, memberId }],
-    //   adds: [{ dematRef | dematId, isin, portfolioId, txns }], appends: [{ shareId, txns }] }
+    // Share imports (NSDL / CDSL statement, Axis Direct reports). plan:
+    //   demats: [{ ref, broker, dpId, clientId, brokerClientId, holderName, memberId }]   new accounts
+    //   dematUpdates: [{ dematId, patch }]                     e.g. link a statement's DP ID to an Axis account
+    //   adds: [{ dematRef | dematId, isin, portfolioId, txns, dividends }]
+    //   appends: [{ shareId, txns }]   replaces: [{ shareId, txns, dividends }]
     async importDemat(plan) {
       const ids = {};
       const commits = [];
@@ -224,11 +227,13 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
       const op = (fn) => { fn(b); if (++n >= 450) { commits.push(b.commit()); b = writeBatch(db); n = 0; } };
       plan.demats.forEach((d, i) => {
         ids[d.ref] = newId('demats');
-        op((w) => w.set(doc(db, 'demats', ids[d.ref]), { broker: d.broker || '', dpId: d.dpId, clientId: d.clientId, holderName: d.holderName || '', memberId: d.memberId || null, order: Date.now() + i }));
+        op((w) => w.set(doc(db, 'demats', ids[d.ref]), { broker: d.broker || '', dpId: d.dpId || '', clientId: d.clientId || '', brokerClientId: d.brokerClientId || null, holderName: d.holderName || '', memberId: d.memberId || null, order: Date.now() + i }));
       });
+      (plan.dematUpdates || []).forEach((u) => op((w) => w.update(doc(db, 'demats', u.dematId), u.patch)));
       plan.adds.forEach((a, i) => op((w) => w.set(doc(db, 'shares', newId('shares')), {
-        isin: a.isin, dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, order: Date.now() + i, txns: a.txns, dividends: [], sectorOverride: null,
+        isin: a.isin, name: a.name || '', dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, order: Date.now() + i, txns: a.txns, dividends: a.dividends || [], sectorOverride: null,
       })));
+      (plan.replaces || []).forEach((r) => op((w) => w.update(doc(db, 'shares', r.shareId), { txns: r.txns, dividends: r.dividends || [] })));
       plan.appends.forEach((a) => {
         const sh = data.shares.find((s) => s.id === a.shareId);
         op((w) => w.update(doc(db, 'shares', a.shareId), { txns: [...(sh?.txns || []), ...a.txns] }));
