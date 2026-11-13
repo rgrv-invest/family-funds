@@ -56,7 +56,21 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   hourly; it shows "Share prices as of <date>" in the sidebar.
 - **Demat accounts and shares** live in Firestore (`demats`, `shares`). A share sits in a portfolio
   of its own choosing (not per demat account) and can be moved like a folio.
-- **NSDL / CDSL CAS import** ("Import CAS" → Shares): the statement PDF is read in the browser
+- **Axis Direct import** ("Import CAS" → Shares · Axis Direct), the main route for shares: the
+  **Portfolio Holding Statement** (ISIN, quantity and Axis's average cost on a date) and, optionally,
+  the **PAN Level Transaction Report** (trades and dividends). Both are password-protected Excel
+  files (password: the PAN in capitals); `js/xlsx.js` unlocks and reads them in the browser with no
+  libraries (Excel "Standard" encryption: SHA-1 key, AES-128) and nothing is uploaded. `js/axis.js`
+  takes the holding statement as the starting point (each share at Axis's average cost), adds
+  trades dated after it, and merges dividends. Trade-report names are matched to ISINs via the
+  holding statement, then the price file. A share gets a first-bought date only when the trade
+  report explains its whole holding (so run both reports from the account's opening date). The
+  account is remembered by its Axis client ID; re-importing the same files changes nothing, and a
+  newer pair updates quantities and averages (keeping any first-bought date you entered).
+- **NSDL / CDSL CAS import** ("Import CAS" → Shares · NSDL / CDSL), for other brokers or to check
+  quantities: if a statement account is the Axis account already tracked, choose it under
+  "Already in the tracker as" so its shares aren't added twice.
+- **NSDL / CDSL details:** the statement PDF is read in the browser
   (`js/cas-demat.js`; password usually the PAN in capitals) and never uploaded. Demat accounts are
   matched by DP ID + client ID, shares by ISIN. The review shows each share as New, No change, or a
   quantity change (`60 → 75 (+15)`); an increase is "Bought more" (optional price) or "Bonus /
@@ -87,11 +101,13 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 | `js/mf.js` | mfapi.in client + AMFI category → asset class mapping + ISIN lookup |
 | `js/cas.js` | CAS PDF reader (pdf.js) and parser → folios, schemes, transactions |
 | `js/cas-demat.js` | NSDL / CDSL CAS parser → demat accounts and shares; import matching |
+| `js/xlsx.js` | Reads .xlsx files in the browser, including password-protected ones |
+| `js/axis.js` | Axis Direct holding statement + transaction report → shares; import matching |
 | `js/prices.js` | Loads `data/prices.json` and `data/stock-meta.json` from the site |
 | `scripts/share_prices.py`, `scripts/stock_meta.py` | The two GitHub Action jobs (standard-library Python) |
 | `.github/workflows/` | `share-prices.yml` (daily), `stock-meta.yml` (monthly / on upload) |
 | `data/` | `prices.json`, `stock-meta.json` (written by the jobs), `include-isins.txt`, `amfi/` (manual AMFI uploads) |
-| `tests/` | `node --test tests/*.test.mjs`: share maths and statement import matching |
+| `tests/` | `node --test tests/*.test.mjs`: share maths, statement and Axis import matching |
 | `js/format.js` | Indian number/date formatting |
 | `js/data.js`, `js/preview-main.js` | Sample-data store for the offline preview |
 | `build-preview.mjs` | `node build-preview.mjs` → single-file `preview.html` with sample data |
@@ -193,3 +209,24 @@ different.
 account it is and optionally an average buy price for each share), then click **Import**. Nothing
 is uploaded: the PDF is read in your browser. Do the same with each new statement; shares that
 haven't changed are left alone.
+
+## Getting your Axis Direct reports (forward this to family members)
+
+The share import reads two Excel files from Axis Direct. Run **both for the same dates: from the
+day the account was opened up to today**. (Starting from the opening date lets the app work out
+when each share was first bought, which XIRR needs.)
+
+1. Log in to Axis Direct on a computer (the website, not the app, is easiest for downloads).
+2. In the reports / statements section, download the **Portfolio Holding Statement**: set the
+   date range from the account's opening date to today, and choose Excel.
+3. In the same section, download the **PAN Level Transaction Report** (Equity) for the same dates,
+   also as Excel.
+4. Both files are password-protected; the password is the **PAN in capital letters**.
+5. In Family Funds: **Import CAS** → **Shares · Axis Direct** → choose the holding statement in the
+   first box and the transaction report in the second → enter the password → **Read statement**.
+6. The first time, choose **whose account this is** and which portfolio the shares go in ("Put all
+   new shares in" sets them all at once), then **Import**.
+7. Next time, download both again (same start date, new end date) and import them the same way:
+   only the changes are applied.
+
+Nothing is uploaded: the files are read in your browser.
