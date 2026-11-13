@@ -1,0 +1,59 @@
+# Share sectors (Nifty 500 list) and market-cap categories (AMFI) into data/stock-meta.json.
+# Runs monthly, on demand, and whenever a new AMFI list is uploaded to data/amfi/.
+# On a pull request that changes the script it only checks the downloads work (nothing is committed).
+name: Stock sectors and market cap
+
+on:
+  schedule:
+    - cron: '23 2 3 * *'   # 07:53 IST on the 3rd of every month
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'data/amfi/**'
+  pull_request:
+    paths:
+      - scripts/stock_meta.py
+      - .github/workflows/stock-meta.yml
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: stock-meta
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the downloads (pull request, nothing saved)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/stock_meta.py --dry-run
+
+      - name: Update sectors and market cap
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/stock_meta.py
+
+      - name: Save if changed
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add data/stock-meta.json
+          if git diff --cached --quiet; then
+            echo "No change; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Stock sectors and market cap ($(python3 -c "import json;print(json.load(open('data/stock-meta.json'))['capPeriod'])"))"
+          git pull --rebase --quiet
+          git push
+          gh api --method POST "repos/${{ github.repository }}/pages/builds" > /dev/null \
+            && echo "Requested a GitHub Pages rebuild." \
+            || echo "Could not request a Pages rebuild (the site will update on the next push)."

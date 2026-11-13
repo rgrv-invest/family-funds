@@ -6,6 +6,8 @@
 //   folios:     { id, folioNo, amc, holder, portfolioId }   (portfolioId null = unassigned)
 //   holdings:   { id, folioId, schemeCode, txns: [{ date, amount, units }] }  (amount < 0 = redemption)
 //   schemes:    { code, name, amc, assetClass, category, nav, navDate }
+//   demats:     { id, broker, dpId, clientId, holderName, memberId }
+//   shares:     { id, isin, dematId, portfolioId, txns: [{ date, qty, price, kind }], dividends, sectorOverride }
 
 const NAV_DATE = '2026-10-01';
 
@@ -23,6 +25,34 @@ export const SCHEMES = [
   { code: '120505', name: 'Axis Short Duration Fund', amc: 'Axis', assetClass: 'Debt', category: 'Short Duration', nav: 32.04, cagr: 0.071 },
   { code: '119132', name: 'Nippon India Gold Savings Fund', amc: 'Nippon India', assetClass: 'Gold', category: 'Gold FoF', nav: 41.76, cagr: 0.17 },
 ].map((s) => ({ ...s, navDate: NAV_DATE }));
+
+// Share prices and stock metadata in the same shape as data/prices.json and data/stock-meta.json.
+const SAMPLE_PRICES = {
+  date: NAV_DATE, source: 'NSE',
+  p: {
+    INE002A01018: [1324.4, 'RELIANCE', 'RELIANCE INDUSTRIES LTD'],
+    INE040A01034: [798.15, 'HDFCBANK', 'HDFC BANK LTD'],
+    INE009A01021: [1154.1, 'INFY', 'INFOSYS LIMITED'],
+    INE081A01020: [184.85, 'TATASTEEL', 'TATA STEEL LIMITED'],
+    INE006I01046: [1272.8, 'ASTRAL', 'ASTRAL LIMITED'],
+    INE002S01010: [1122.8, 'MGL', 'MAHANAGAR GAS LTD.'],
+    INE007A01025: [4389.6, 'CRISIL', 'CRISIL LTD'],
+    INE00LO01017: [10493.0, 'CRAFTSMAN', 'CRAFTSMAN AUTOMATION LTD'],
+  },
+};
+const SAMPLE_META = {
+  capPeriod: '2025-12-31', sectorSource: 'Nifty 500 list (NSE)',
+  m: {
+    INE002A01018: ['L', 'Oil Gas & Consumable Fuels', 'Reliance Industries Ltd'],
+    INE040A01034: ['L', 'Financial Services', 'HDFC Bank Ltd.'],
+    INE009A01021: ['L', 'Information Technology', 'Infosys Ltd'],
+    INE081A01020: ['L', 'Metals & Mining', 'Tata Steel Ltd'],
+    INE006I01046: ['M', 'Capital Goods', 'Astral Ltd'],
+    INE002S01010: ['S', 'Oil Gas & Consumable Fuels', 'Mahanagar Gas Ltd'],
+    INE007A01025: ['M', 'Financial Services', 'CRISIL Ltd.'],
+    INE00LO01017: ['S', 'Automobile and Auto Components', 'Craftsman Automation Ltd'],
+  },
+};
 
 // ---------- sample data generation (deterministic) ----------
 let seed = 7;
@@ -107,7 +137,21 @@ function sampleState() {
     const nav = navOn(s, '2024-12-10');
     h.txns.push({ date: '2024-12-10', amount: -150000, units: -(+(150000 / nav).toFixed(3)) });
   }
-  return { members, portfolios, folios, holdings, schemes: SCHEMES, navDate: NAV_DATE, users: [{ id: 'mom@example.com', role: 'editor' }, { id: 'sister@example.com', role: 'viewer' }] };
+  const demats = [
+    { id: 'd1', broker: 'Zerodha', dpId: '12081600', clientId: '00140178', holderName: 'Dad', memberId: 'm1' },
+    { id: 'd2', broker: 'Groww', dpId: '12088700', clientId: '00527713', holderName: 'Me', memberId: 'm3' },
+  ];
+  const sh = (sid, isin, dematId, portfolioId, txns, dividends = []) => ({ id: sid, isin, dematId, portfolioId, txns, dividends, sectorOverride: null });
+  const shares = [
+    sh('s1', 'INE002A01018', 'd1', 'p1', [{ date: '2020-03-16', qty: 60, price: 1105, kind: 'opening' }],
+      [{ date: '2023-08-21', amount: 540 }, { date: '2024-08-19', amount: 600 }, { date: '2025-08-14', amount: 330 }]),
+    sh('s2', 'INE040A01034', 'd1', 'p1', [{ date: '2021-06-01', qty: 100, price: 1480, kind: 'buy' }, { date: '2025-08-26', qty: 100, price: 0, kind: 'bonus' }]),
+    sh('s3', 'INE081A01020', 'd1', 'p2', [{ date: '2022-02-10', qty: 200, price: 115, kind: 'buy' }, { date: '2025-06-10', qty: -200, price: null, kind: 'sell' }]),
+    sh('s4', 'INE009A01021', 'd2', 'p4', [{ date: null, qty: 40, price: null, kind: 'opening' }]), // no buy price yet
+    sh('s5', 'INE006I01046', 'd2', 'p4', [{ date: '2023-05-02', qty: 25, price: 1400, kind: 'opening' }]),
+    sh('s6', 'INE002S01010', 'd2', null, [{ date: '2026-09-15', qty: 30, price: 1080, kind: 'buy' }]), // unassigned, under a year
+  ];
+  return { members, portfolios, folios, holdings, schemes: SCHEMES, navDate: NAV_DATE, demats, shares, prices: SAMPLE_PRICES, stockMeta: SAMPLE_META, users: [{ id: 'mom@example.com', role: 'editor' }, { id: 'sister@example.com', role: 'viewer' }] };
 }
 
 // ---------- store ----------
@@ -145,7 +189,41 @@ export const sampleStore = {
     commit({
       portfolios: state.portfolios.filter((p) => p.id !== portfolioId),
       folios: state.folios.map((f) => (f.portfolioId === portfolioId ? { ...f, portfolioId: null } : f)),
+      shares: state.shares.map((s) => (s.portfolioId === portfolioId ? { ...s, portfolioId: null } : s)),
     });
+  },
+  // ---------- shares ----------
+  async addDemat(d) {
+    const x = { id: id('d'), broker: '', dpId: '', clientId: '', holderName: '', memberId: null, ...d };
+    commit({ demats: [...state.demats, x] });
+    return x;
+  },
+  async addShare({ isin, dematId, portfolioId, txns, dividends = [] }) {
+    const x = { id: id('s'), isin, dematId, portfolioId: portfolioId || null, txns, dividends, sectorOverride: null };
+    commit({ shares: [...state.shares, x] });
+    return x;
+  },
+  async updateShare(shareId, patch) {
+    commit({ shares: state.shares.map((s) => (s.id === shareId ? { ...s, ...patch } : s)) });
+  },
+  moveShare(shareId, portfolioId) {
+    commit({ shares: state.shares.map((s) => (s.id === shareId ? { ...s, portfolioId } : s)) });
+  },
+  async deleteShare(shareId) {
+    commit({ shares: state.shares.filter((s) => s.id !== shareId) });
+  },
+  async importDemat(plan) {
+    const ids = {};
+    const demats = [...state.demats, ...plan.demats.map((d) => { ids[d.ref] = id('d'); const { ref, ...rest } = d; return { id: ids[d.ref], ...rest }; })];
+    const updated = demats.map((d) => { const u = (plan.dematUpdates || []).find((x) => x.dematId === d.id); return u ? { ...d, ...u.patch } : d; });
+    let shares = state.shares.map((s) => {
+      const rep = (plan.replaces || []).find((r) => r.shareId === s.id);
+      const add = plan.appends.filter((a) => a.shareId === s.id).flatMap((a) => a.txns);
+      const base = rep ? { ...s, txns: rep.txns, dividends: rep.dividends || [] } : s;
+      return add.length ? { ...base, txns: [...base.txns, ...add] } : base;
+    });
+    shares = [...shares, ...plan.adds.map((a) => ({ id: id('s'), isin: a.isin, name: a.name || '', dematId: a.dematId || ids[a.dematRef], portfolioId: a.portfolioId || null, txns: a.txns, dividends: a.dividends || [], sectorOverride: null }))];
+    commit({ demats: updated, shares });
   },
   moveFolio(folioId, portfolioId, holder) {
     commit({ folios: state.folios.map((f) => (f.id === folioId ? { ...f, portfolioId, ...(holder ? { holder } : {}) } : f)) });

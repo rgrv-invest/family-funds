@@ -34,10 +34,10 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Family data.
+    // Family data (mutual funds, and share holdings by demat account).
     match /{col}/{id} {
-      allow read: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes'] && canRead();
-      allow write: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes'] && canEdit();
+      allow read: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes', 'demats', 'shares'] && canRead();
+      allow write: if col in ['members', 'portfolios', 'folios', 'holdings', 'schemes', 'demats', 'shares'] && canEdit();
     }
 
     // Anyone with read access may refresh the stored NAV of a scheme (no other fields).
