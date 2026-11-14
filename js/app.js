@@ -1387,7 +1387,8 @@ function reviewAxisDialog(plan, portfolioId) {
   const a = plan.account;
   const avg = (txns) => shareStats({ txns }, null, null).avgPrice;
   const nActions = plan.rows.filter((r) => r.status !== 'same').length;
-  const noDate = plan.rows.filter((r) => r.status !== 'missing' && r.qty > 0 && r.txns.some((t) => t.kind === 'opening' && !t.date)).length;
+  const noDate = plan.rows.filter((r) => r.status !== 'missing' && r.qty > 0 && r.txns.some((t) => t.kind === 'opening' && !t.date));
+  const firstBought = (txns) => txns?.find((t) => t.kind === 'opening')?.date || null;
   const words = new Set(a.name.toLowerCase().split(/\s+/));
   const guess = s.members.find((m) => m.name.toLowerCase().split(/\s+/).some((w) => words.has(w)))?.id || (portfolioId && portfolioById(s, portfolioId)?.memberId) || '';
   const rowHtml = (r, i) => {
@@ -1397,12 +1398,15 @@ function reviewAxisDialog(plan, portfolioId) {
     let tag = '', what = '', controls = '';
     if (r.status === 'new') {
       tag = r.qty > 0 ? 'New' : 'New · sold';
-      what = r.qty > 0 ? `${fmtUnits(r.qty)} shares · avg ${avg(r.txns) != null ? fmtNav(avg(r.txns)) : '—'}` : `held ${fmtUnits(r.held)} on ${date(a.asOf)}, sold since`;
+      what = r.qty > 0 ? `${fmtUnits(r.qty)} shares · avg ${avg(r.txns) != null ? fmtNav(avg(r.txns)) : '—'}${firstBought(r.txns) ? ` · since ${date(firstBought(r.txns))}` : ''}` : `held ${fmtUnits(r.held)} on ${date(a.asOf)}, sold since`;
       controls = `<div class="dm-ctrl"><label>Portfolio<select name="pf-${i}">${portfolioOptions(s, portfolioId)}</select></label></div>`;
     } else if (r.status === 'changed') {
       const o = avg(r.share.txns || []), n = avg(r.txns);
       tag = r.oldQty !== r.qty ? `${fmtUnits(r.oldQty)} → ${fmtUnits(r.qty)}` : 'Updated';
-      what = [o != null && n != null && Math.abs(o - n) > 0.005 ? `avg ${fmtNav(o)} → ${fmtNav(n)}` : '', r.newDividends > 0 ? `${plural(r.newDividends, 'new dividend')}` : ''].filter(Boolean).join(' · ');
+      const fb = firstBought(r.txns);
+      what = [o != null && n != null && Math.abs(o - n) > 0.005 ? `avg ${fmtNav(o)} → ${fmtNav(n)}` : '',
+        fb && fb !== firstBought(r.share.txns) ? `first bought ${date(fb)}` : '',
+        r.newDividends > 0 ? `${plural(r.newDividends, 'new dividend')}` : ''].filter(Boolean).join(' · ');
     } else if (r.status === 'same') { tag = 'No change'; what = `${fmtUnits(r.qty)} shares`; }
     else if (r.status === 'missing') {
       tag = 'Not in these files';
@@ -1416,10 +1420,13 @@ function reviewAxisDialog(plan, portfolioId) {
           ${notes.map((n) => `<small class="warn-text">${esc(n)}</small>`).join('')}
           ${controls}</div></div></div>`;
   };
+  // Only things that actually need attention; everything the app handled itself stays quiet.
+  const names = (list) => list.map((x) => `<b>${esc(x)}</b>`).join(', ');
+  const late = [...new Set(plan.lateActions.map((o) => o.name))];
   const extra = [
-    plan.unmatched.length ? `Couldn’t identify ${plan.unmatched.map(esc).join(', ')} in the trade report; ${plan.unmatched.length === 1 ? 'it was' : 'they were'} skipped. Add ${plan.unmatched.length === 1 ? 'it' : 'them'} with “+ Add share”.` : '',
-    plan.other.length ? `${plural(plan.other.length, 'other entry', 'other entries')} in the trade report (${[...new Set(plan.other.map((o) => esc(o.what)))].join(', ')}) ${plan.other.length === 1 ? 'was' : 'were'} skipped.` : '',
-    noDate ? `${plural(noDate, 'share')} ${noDate === 1 ? 'has' : 'have'} no purchase date, so XIRR shows “—” for ${noDate === 1 ? 'it' : 'them'}. Run the transaction report from the day the account was opened to fill these in, or add dates later (Edit → Edit buy price / first bought).` : '',
+    plan.unmatched.length ? `Trades in ${names(plan.unmatched)} after ${date(a.asOf)} couldn’t be matched to a share, so they weren’t added. If you still hold ${plan.unmatched.length === 1 ? 'it, add it' : 'them, add them'} with “+ Add share”.` : '',
+    late.length ? `${names(late)} had a bonus, split or merger after ${date(a.asOf)}, which this holding statement doesn’t include yet. Download a holding statement dated today and import both files again.` : '',
+    noDate.length ? `The transaction report doesn’t cover every share of ${names(noDate.map((r) => r.name || shareInfo(s, { isin: r.isin }).name))} (for example, shares moved in from another broker, or bought before ${a.tradesFrom ? date(a.tradesFrom) : 'the report starts'}), so ${noDate.length === 1 ? 'its' : 'their'} first-bought date isn’t known and XIRR shows “—”. ${a.tradesFrom ? 'Run the transaction report from an earlier date, or add' : 'Add the transaction report, or add'} the date later with Edit → Edit buy price / first bought.` : '',
   ].filter(Boolean);
   openDialog({
     title: 'Review Axis Direct import',

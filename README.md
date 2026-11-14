@@ -64,7 +64,10 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   takes the holding statement as the starting point (each share at Axis's average cost), adds
   trades dated after it, and merges dividends. Trade-report names are matched to ISINs via the
   holding statement, then the price file. A share gets a first-bought date only when the trade
-  report explains its whole holding (so run both reports from the account's opening date). The
+  report explains its whole holding (so run both reports from the account's opening date);
+  bonuses, splits, mergers, demergers and buybacks in the report are counted for this, and the date
+  is the start of the current holding (after the last time it went to zero). The review only shows
+  a message when something needs attention. The
   account is remembered by its Axis client ID; re-importing the same files changes nothing, and a
   newer pair updates quantities and averages (keeping any first-bought date you entered).
 - **NSDL / CDSL CAS import** ("Import CAS" → Shares · NSDL / CDSL), for other brokers or to check
@@ -212,21 +215,22 @@ haven't changed are left alone.
 
 ## Getting your Axis Direct reports (forward this to family members)
 
-The share import reads two Excel files from Axis Direct. Run **both for the same dates: from the
-day the account was opened up to today**. (Starting from the opening date lets the app work out
-when each share was first bought, which XIRR needs.)
+The share import reads two Excel files from Axis Direct: the holding statement as of **today**, and
+the transaction report **from the day the account was opened up to today**. (Starting from the
+opening date lets the app work out when each share was first bought, which XIRR needs.)
 
-1. Log in to Axis Direct on a computer (the website, not the app, is easiest for downloads).
-2. In the reports / statements section, download the **Portfolio Holding Statement**: set the
-   date range from the account's opening date to today, and choose Excel.
-3. In the same section, download the **PAN Level Transaction Report** (Equity) for the same dates,
-   also as Excel.
+1. Open the Axis Direct app (or website) and log in.
+2. Open the left menu → **Reports** → **My Reports** → **Holding Statement**, and download it
+   dated today, as Excel.
+3. In **My Reports**, open **PAN Level Transaction Report** (Equity), set the dates from the day the
+   account was opened (or 1 Jan 2015 if you're not sure) to today, and download it as Excel.
 4. Both files are password-protected; the password is the **PAN in capital letters**.
 5. In Family Funds: **Import CAS** → **Shares · Axis Direct** → choose the holding statement in the
    first box and the transaction report in the second → enter the password → **Read statement**.
 6. The first time, choose **whose account this is** and which portfolio the shares go in ("Put all
    new shares in" sets them all at once), then **Import**.
-7. Next time, download both again (same start date, new end date) and import them the same way:
+7. Next time, download both again (holding statement dated today, transaction report from the same
+   start date to today) and import them the same way:
    only the changes are applied.
 
 Nothing is uploaded: the files are read in your browser.
