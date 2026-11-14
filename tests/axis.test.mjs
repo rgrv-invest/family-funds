@@ -112,3 +112,51 @@ test('files from two different accounts are refused', () => {
   const t = parseAxisWorkbook(T); t.clientId = '999';
   assert.throws(() => planAxisImport({ holdings: parseAxisWorkbook(H), trades: t }, { demats: [], shares: [], prices }), /different accounts/);
 });
+
+// Corporate actions as Axis writes them: each dated with the lot it applies to, cost carried over.
+const act = (date, n, what, qty) => [date, n, what, qty, 0];
+test('bonus, split, merger, demerger and buyback entries are counted, so first-bought dates are found', () => {
+  const h = parseAxisWorkbook(holdingSheet('14-Nov-2026', [
+    ['HDFC Bank Ltd', 'INE040A01034', 200, 150000], ['Reliance Industries Ltd', 'INE002A01018', 100, 90000],
+    ['Infosys Ltd', 'INE009A01021', 40, 50000], ['Gayatri Projects Ltd', 'INE336H01023', 25, 1000]]));
+  const t = parseAxisWorkbook(tradeSheet('01/JAN/2015', '14/NOV/2026', [
+    // HDFC Ltd (no longer listed) merged into HDFC Bank; its lots carry their own buy dates.
+    ['2019-02-01', 'Housing Development Finance CorporationLtd(Merged)', 'BUY', 10, 2000], act('2019-02-01', 'Housing Development Finance CorporationLtd(Merged)', 'MERGER SELL', 10),
+    ['2020-05-01', 'HDFC Bank Ltd', 'BUY', 50, 1000], act('2023-07-13', 'HDFC Bank Ltd', 'MERGER BUY', 17),
+    ['2024-01-01', 'HDFC Bank Ltd', 'SELL', 17, 1500], act('2025-08-26', 'HDFC Bank Ltd', 'BONUS', 50),
+    ['2025-09-01', 'HDFC Bank Ltd', 'BUY', 100, 950],
+    // Reliance: cost-adjustment pair (net zero) and a 1:1 bonus.
+    ['2021-04-19', 'Reliance Industries Ltd', 'BUY', 50, 1900], act('2021-04-19', 'Reliance Industries Ltd', 'DEMERGERSELL', 50),
+    act('2021-04-19', 'Reliance Industries Ltd', 'DEMERGERBUY', 50), act('2024-10-28', 'Reliance Industries Ltd', 'BONUS', 50),
+    // Infosys: sold out completely in 2018, bought again in 2022 and split 2:1, part bought back.
+    ['2017-01-01', 'Infosys Ltd', 'BUY', 30, 1000], ['2018-01-01', 'Infosys Ltd', 'SELL', 30, 1100],
+    ['2022-03-01', 'Infosys Ltd', 'BUY', 25, 1700], act('2022-03-01', 'Infosys Ltd', 'SPLIT SELL', 25), act('2022-03-01', 'Infosys Ltd', 'SPLIT BUY', 50),
+    act('2023-12-01', 'Infosys Ltd', 'BUYBACK', 10),
+    // Gayatri: 10 shares moved in from another broker, so the report can't explain the holding.
+    ['2026-01-05', 'Gayatri Projects Ltd', 'BUY', 15, 40]]));
+  const plan = planAxisImport({ holdings: h, trades: t }, { demats: [], shares: [], prices });
+  const first = Object.fromEntries(plan.rows.map((r) => [r.isin, r.txns[0].date]));
+  assert.deepEqual(first, { INE040A01034: '2019-02-01', INE002A01018: '2021-04-19', INE009A01021: '2022-03-01', INE336H01023: null });
+  assert.deepEqual(plan.unmatched, []); // the merged-away company needs no attention
+  assert.deepEqual(plan.lateActions, []);
+});
+
+test('only names traded after the holdings date are reported as unmatched; later corporate actions are flagged', () => {
+  const h = parseAxisWorkbook(holdingSheet('31-Mar-2026', [['Reliance Industries Ltd', 'INE002A01018', 100, 91641.47]]));
+  const t = parseAxisWorkbook(tradeSheet('01/JAN/2015', '13/NOV/2026', [
+    ['2019-01-01', 'Old Widgets Ltd', 'BUY', 10, 5], ['2019-06-01', 'Old Widgets Ltd', 'SELL', 10, 6],
+    ['2026-10-01', 'New Widgets Ltd', 'BUY', 10, 5], act('2026-10-28', 'Reliance Industries Ltd', 'BONUS', 100)]));
+  const plan = planAxisImport({ holdings: h, trades: t }, { demats: [], shares: [], prices });
+  assert.deepEqual(plan.unmatched, ['New Widgets Ltd']);
+  assert.deepEqual(plan.lateActions.map((o) => [o.name, o.what]), [['Reliance Industries Ltd', 'BONUS']]);
+});
+
+test('re-importing with a longer trade report fills in missing first-bought dates', () => {
+  const h = parseAxisWorkbook(holdingSheet('14-Nov-2026', [['Reliance Industries Ltd', 'INE002A01018', 100, 90000]]));
+  const state = { demats: [{ id: 'd1', brokerClientId: '1234567' }], prices,
+    shares: [{ id: 's1', isin: 'INE002A01018', dematId: 'd1', txns: [{ date: null, qty: 100, price: 900, kind: 'opening' }], dividends: [] }] };
+  const t = parseAxisWorkbook(tradeSheet('01/JAN/2015', '14/NOV/2026', [['2021-04-19', 'Reliance Industries Ltd', 'BUY', 50, 1900], act('2024-10-28', 'Reliance Industries Ltd', 'BONUS', 50)]));
+  const plan = planAxisImport({ holdings: h, trades: t }, state);
+  assert.equal(plan.rows[0].status, 'changed');
+  assert.deepEqual(axisWrites(plan, {}, { today: '2026-11-14' }).replaces[0].txns, [{ date: '2021-04-19', qty: 100, price: 900, kind: 'opening' }]);
+});

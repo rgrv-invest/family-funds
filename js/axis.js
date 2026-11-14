@@ -35,7 +35,7 @@ function table(rows, required) {
 }
 
 // Holding statement -> { kind: 'holdings', clientId, name, asOf, rows: [{ name, isin, qty, invested, avgCost, marketPrice }] }
-// Trade report      -> { kind: 'trades', clientId, name, from, to, trades: [{ date, name, side, qty, price, cost }], dividends: [{ date, name, amount }], other: [...] }
+// Trade report      -> { kind: 'trades', clientId, name, from, to, trades: [{ date, name, side, qty, price, cost }], dividends: [{ date, name, amount }], other: [{ date, name, what, qty, dir }] }
 export function parseAxisWorkbook(sheets) {
   for (const { rows } of sheets) {
     const m = meta(rows);
@@ -67,12 +67,22 @@ export function parseAxisWorkbook(sheets) {
           const charges = [c.brk, c.gst, c.other].reduce((a, i) => a + (toNum(cell(r, i)) || 0), 0);
           trades.push({ date, name: nm, side, qty, price, cost: side === 'BUY' ? (value + charges) / qty : price });
         } else if (/DIVIDEND/.test(side)) dividends.push({ date, name: nm, amount: value });
-        else other.push({ date, name: nm, what: side, qty });
+        else other.push({ date, name: nm, what: side, qty, dir: actionDir(side) });
       }
       return { kind: 'trades', clientId, name, from: axisDate(m['from date']), to: axisDate(m['to date']), trades, dividends, other };
     }
   }
   return null;
+}
+
+// Corporate actions in the trade report (MERGER BUY/SELL, BONUS, SPLIT BUY/SELL, DEMERGERIN,
+// DEMERGERBUY/SELL, BUYBACK, …): +1 adds shares, -1 removes them, 0 = not understood.
+// Axis dates each of these with the date of the lot it applies to, not the date of the event.
+export function actionDir(what) {
+  const w = String(what).toUpperCase().replace(/[^A-Z]/g, '');
+  if (/BUYBACK|SELL|OUT$|EXTINGUISH|REDEEM/.test(w)) return -1;
+  if (/BUY|BONUS|IN$|ALLOT|RIGHTS|CREDIT/.test(w)) return 1;
+  return 0;
 }
 
 export async function readAxisFile(file, password) {
@@ -112,19 +122,51 @@ export function planAxisImport({ holdings, trades }, state) {
     throw new Error(`The two files are for different accounts (client ${holdings.clientId} and ${trades.clientId}).`);
   }
   const asOf = holdings.asOf;
+  const later = (d) => !!asOf && d > asOf;
   const isinOf = isinLookup(holdings, state);
-  const unmatched = new Set();
-  const tradesBy = new Map(), divsBy = new Map();
+  const unmatched = new Set(), lateActions = [];
+  const tradesBy = new Map(), divsBy = new Map(), eventsBy = new Map(), mergedAway = [];
+  const push = (m, k, v) => (m.get(k) || m.set(k, []).get(k)).push(v);
   for (const t of trades?.trades || []) {
     const isin = isinOf(t.name);
-    if (!isin) { unmatched.add(t.name); continue; }
-    (tradesBy.get(isin) || tradesBy.set(isin, []).get(isin)).push(t);
+    // A name we can't place only matters if it traded after the holdings date (otherwise the
+    // holding statement already has it, or it's no longer held).
+    if (!isin) { if (later(t.date)) unmatched.add(t.name); continue; }
+    push(tradesBy, isin, t);
+    push(eventsBy, isin, { date: t.date, qty: t.side === 'BUY' ? t.qty : -t.qty, buy: t.side === 'BUY' });
+  }
+  for (const o of trades?.other || []) {
+    const isin = isinOf(o.name);
+    if (!isin) { if (/^MERGER/i.test(o.what) && o.dir < 0) mergedAway.push(o.date); continue; }
+    if (later(o.date)) { lateActions.push(o); continue; }
+    if (o.dir) push(eventsBy, isin, { date: o.date, qty: o.dir * o.qty, buy: o.dir > 0 && /^MERGER|^DEMERGER ?IN|ALLOT|RIGHTS/i.test(o.what), merger: /^MERGER/i.test(o.what) && o.dir > 0 });
   }
   for (const d of trades?.dividends || []) {
     const isin = isinOf(d.name);
-    if (!isin) { unmatched.add(d.name); continue; }
-    (divsBy.get(isin) || divsBy.set(isin, []).get(isin)).push({ date: d.date, amount: r4(d.amount) });
+    if (isin) push(divsBy, isin, { date: d.date, amount: r4(d.amount) });
   }
+  // Shares received in a merger were first bought as the merged-away company; when there's only
+  // one merger into a share we hold, its first-bought date is the old company's.
+  const mergerTargets = [...eventsBy].filter(([, es]) => es.some((e) => e.merger)).map(([isin]) => isin);
+  const mergedFrom = mergerTargets.length === 1 && mergedAway.length ? mergedAway.sort()[0] : null;
+
+  // First-bought date of what's held on the statement date: the start of the current run of
+  // holding (after the last time the balance was zero), but only when the report explains every
+  // share held. Otherwise null, and the share shows XIRR "—" until a date is added.
+  const firstBoughtOf = (isin, held) => {
+    const es = (eventsBy.get(isin) || []).filter((e) => !later(e.date)).sort((a, b) => a.date.localeCompare(b.date));
+    let bal = 0, start = null;
+    for (let i = 0; i < es.length;) {
+      const d = es[i].date;
+      let buyHere = false;
+      for (; i < es.length && es[i].date === d; i++) { bal += es[i].qty; buyHere ||= es[i].buy; }
+      if (bal < -1e-6) return null; // sold shares bought before the report starts
+      if (bal < 1e-6) start = null;
+      else if (!start && buyHere) start = d;
+    }
+    if (Math.abs(bal - held) > 1e-6 || !start) return null;
+    return mergedFrom && mergerTargets[0] === isin && mergedFrom < start ? mergedFrom : start;
+  };
 
   const demat = state.demats.find((d) => d.brokerClientId && d.brokerClientId === holdings.clientId) || null;
   const tracked = demat ? state.shares.filter((s) => s.dematId === demat.id) : [];
@@ -132,15 +174,13 @@ export function planAxisImport({ holdings, trades }, state) {
   const rows = isins.flatMap((isin) => {
     const h = holdings.rows.find((r) => r.isin === isin);
     const ts = tradesBy.get(isin) || [];
-    const before = ts.filter((t) => !asOf || t.date <= asOf), after = ts.filter((t) => asOf && t.date > asOf);
-    // A first-bought date only when the trade report explains the whole holding.
-    const net = before.reduce((a, t) => a + (t.side === 'BUY' ? t.qty : -t.qty), 0);
-    const firstBuy = before.filter((t) => t.side === 'BUY').map((t) => t.date).sort()[0] || null;
+    const after = ts.filter((t) => later(t.date));
+    const firstBuy = h && h.qty > 0 ? firstBoughtOf(isin, h.qty) : null;
     const share = tracked.find((s) => s.isin === isin) || null;
     const oldOpening = share?.txns?.find((t) => t.kind === 'opening');
     const txns = [];
     if (h && h.qty > 0) {
-      txns.push({ date: (h && Math.abs(net - h.qty) < 1e-6 ? firstBuy : null) || oldOpening?.date || null, qty: h.qty,
+      txns.push({ date: firstBuy || oldOpening?.date || null, qty: h.qty,
         price: h.invested != null ? r4(h.invested / h.qty) : null, kind: 'opening' });
     }
     for (const t of after) txns.push({ date: t.date, qty: t.side === 'BUY' ? t.qty : -t.qty, price: r4(t.cost), kind: t.side === 'BUY' ? 'buy' : 'sell' });
@@ -159,7 +199,7 @@ export function planAxisImport({ holdings, trades }, state) {
     if (!isins.includes(s.isin) && txnQty(s.txns || []) > 0) rows.push({ isin: s.isin, name: '', status: 'missing', share: s, qty: 0, oldQty: txnQty(s.txns), price: state.prices?.p?.[s.isin]?.[0] ?? null });
   }
   return { account: { clientId: holdings.clientId, name: holdings.name || trades?.name || '', asOf, tradesFrom: trades?.from, tradesTo: trades?.to }, demat, rows,
-    unmatched: [...unmatched], other: trades?.other || [] };
+    unmatched: [...unmatched], lateActions };
 }
 
 // choices[i] = { include, portfolioId, sellAll }; memberId for a new account.
