@@ -47,11 +47,14 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   series); add other ISINs (an ETF, a REIT) to `data/include-isins.txt`. On failure nothing is
   written, so the app just shows an older "Share prices as of" date. The file doubles as the search
   list for "+ Add share". No keys, no paid APIs, no live prices.
-- **Sector and market cap:** `.github/workflows/stock-meta.yml` (3rd of each month, on demand, and
-  whenever a file is uploaded to `data/amfi/`) saves `data/stock-meta.json`:
-  `m: { ISIN: [L|M|S, sector, name] }`. Sector comes from NSE's Nifty 500 list ("Industry"), so
-  smaller companies show "Other" unless you set one. Large / Mid / Small come from AMFI's
-  half-yearly market-cap list. If a source fails, its previous data is kept.
+- **Name, sector and market cap:** `.github/workflows/stock-meta.yml` (every Saturday, on demand,
+  and whenever a file is uploaded to `data/amfi/`) saves `data/stock-meta.json`:
+  `m: { ISIN: [L|M|S, sector, name] }`. The name is the current one from NSE's list of listed
+  companies (`EQUITY_L.csv`), so renames, mergers and demergers show within a week; ETFs keep the
+  broker's name from the import. Sector comes from NSE's Nifty Total Market list (Nifty 500 +
+  Microcap 250, "Industry"); ETFs show as "ETF", and smaller companies show "Other" unless you set
+  one (Edit → Edit sector). Large / Mid / Small come from AMFI's half-yearly market-cap list. If a
+  source fails, its previous data is kept.
 - **The app** loads both files from this site on start, when the tab comes back into view, and
   hourly; it shows "Share prices as of <date>" in the sidebar.
 - **Demat accounts and shares** live in Firestore (`demats`, `shares`). A share sits in a portfolio
@@ -108,7 +111,7 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 | `js/axis.js` | Axis Direct holding statement + transaction report → shares; import matching |
 | `js/prices.js` | Loads `data/prices.json` and `data/stock-meta.json` from the site |
 | `scripts/share_prices.py`, `scripts/stock_meta.py` | The two GitHub Action jobs (standard-library Python) |
-| `.github/workflows/` | `share-prices.yml` (daily), `stock-meta.yml` (monthly / on upload) |
+| `.github/workflows/` | `share-prices.yml` (daily), `stock-meta.yml` (weekly / on upload) |
 | `data/` | `prices.json`, `stock-meta.json` (written by the jobs), `include-isins.txt`, `amfi/` (manual AMFI uploads) |
 | `tests/` | `node --test tests/*.test.mjs`: share maths, statement and Axis import matching |
 | `js/format.js` | Indian number/date formatting |
@@ -169,7 +172,7 @@ editors see a banner saying so.
 ## Refreshing market-cap data (twice a year)
 
 AMFI publishes its market-cap list in early **January** (six months to 31 December) and early
-**July** (six months to 30 June). The monthly job tries AMFI's usual address, so usually there's
+**July** (six months to 30 June). The weekly job tries AMFI's usual address, so usually there's
 nothing to do. If, by mid-February or mid-August, the app still lists shares by the old half-year:
 
 1. Check which list is in use: open `data/stock-meta.json` on GitHub; near the start it says

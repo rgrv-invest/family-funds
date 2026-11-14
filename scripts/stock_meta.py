@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Share sector and market-cap data for Family Funds -> data/stock-meta.json.
 
-Sector: NSE's Nifty 500 constituents list ("Industry" column), so only Nifty 500 companies get one.
+Sector: NSE's Nifty Total Market list ("Industry" column: the Nifty 500 plus the Nifty Microcap 250),
+falling back to the Nifty 500 list. Companies outside these get no sector (the app shows "Other",
+and a sector can be set by hand on the share).
+Name: the current name from NSE's list of listed companies (EQUITY_L), which follows renames,
+mergers and demergers; then the index list's name; then AMFI's (only updated half-yearly).
 Market cap (Large / Mid / Small): AMFI's half-yearly "Average Market Capitalization" list, which
 categorises every listed company. AMFI publishes it in January (six months to 31 December) and July
 (six months to 30 June). This script tries AMFI's usual download address for recent half-years, and
@@ -26,7 +30,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
+EQUITY_URLS = [
+    'https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv',
+    'https://archives.nseindia.com/content/equities/EQUITY_L.csv',
+]
 NIFTY500_URLS = [
+    'https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv',
+    'https://www.niftyindices.com/IndexConstituent/ind_niftytotalmarket_list.csv',
     'https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv',
     'https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv',
     'https://archives.nseindia.com/content/indices/ind_nifty500list.csv',
@@ -72,7 +82,7 @@ def nifty500():
                 errors.append(f'{url}: unexpected columns')
                 continue
             sectors = {r['ISIN Code'].strip(): r['Industry'].strip() for r in rows if r['ISIN Code'].strip() and r['Industry'].strip()}
-            if len(sectors) < 400:
+            if len(sectors) < 400:  # the Nifty 500 or more
                 errors.append(f'{url}: only {len(sectors)} rows')
                 continue
             names = {r['ISIN Code'].strip(): r['Company Name'].strip() for r in rows}
@@ -80,6 +90,31 @@ def nifty500():
         except Exception as e:
             errors.append(str(e))
     raise RuntimeError('Nifty 500 list unavailable: ' + '; '.join(errors))
+
+
+# ---------- current company names (NSE list of listed companies) ----------
+def tidy(name):
+    n = ' '.join(name.split())
+    return re.sub(r'\bLimited$', 'Ltd', n, flags=re.I)
+
+
+def equity_names():
+    errors = []
+    for url in EQUITY_URLS:
+        try:
+            data = get(url)
+            if not data:
+                errors.append(f'{url}: not found')
+                continue
+            rows = [{k.strip(): (v or '').strip() for k, v in r.items()} for r in csv.DictReader(io.StringIO(data.decode('utf-8-sig')))]
+            names = {r['ISIN NUMBER']: tidy(r['NAME OF COMPANY']) for r in rows if r.get('ISIN NUMBER') and r.get('NAME OF COMPANY')}
+            if len(names) < 1500:
+                errors.append(f'{url}: only {len(names)} rows')
+                continue
+            return names, url
+        except Exception as e:
+            errors.append(str(e))
+    raise RuntimeError('NSE company list unavailable: ' + '; '.join(errors))
 
 
 # ---------- AMFI market cap (.xlsx read with the standard library) ----------
@@ -190,11 +225,13 @@ def main():
     names = {k: v[2] for k, v in old_m.items() if v[2]}
     sector_src, cap_src = old.get('sectorSource'), old.get('capPeriod')
     ok, report = 0, []
+    # Names, oldest source first so newer ones win: AMFI (half-yearly), index list (monthly),
+    # NSE's list of listed companies (daily; follows renames, mergers and demergers).
+    index_names, nse_names = {}, {}
 
     try:
-        s, n500_names, url = nifty500()
-        sectors, sector_src, ok = s, 'Nifty 500 list (NSE)', ok + 1
-        names.update({k: v for k, v in n500_names.items() if k not in names})
+        s, index_names, url = nifty500()
+        sectors, sector_src, ok = s, ('Nifty Total Market list (NSE)' if 'totalmarket' in url else 'Nifty 500 list (NSE)'), ok + 1
         report.append(f'Sectors: {len(s)} companies from {url}')
     except Exception as e:
         report.append(f'Sectors: kept previous data ({e})')
@@ -208,6 +245,14 @@ def main():
             report.append(f'Market cap: {len(c)} companies, six months to {period}, from {where}')
     except Exception as e:
         report.append(f'Market cap: kept previous data ({e})')
+    try:
+        nse_names, url = equity_names()
+        ok += 1
+        report.append(f'Names: {len(nse_names)} listed companies from {url}')
+    except Exception as e:
+        report.append(f'Names: kept previous names ({e})')
+    names.update({k: tidy(v) for k, v in index_names.items() if v})
+    names.update(nse_names)
 
     for line in report:
         print(line)
@@ -219,7 +264,7 @@ def main():
         'capPeriod': cap_src,
         'sectorSource': sector_src,
         'note': 'm: ISIN -> [market cap L|M|S or "", sector or "", name]',
-        'm': {k: [caps.get(k, ''), sectors.get(k, ''), names.get(k, '')] for k in sorted(set(caps) | set(sectors))},
+        'm': {k: [caps.get(k, ''), sectors.get(k, ''), names.get(k, '')] for k in sorted(set(caps) | set(sectors) | set(nse_names))},
     }
     md = '### Stock metadata\n' + '\n'.join(f'- {l}' for l in report)
     if a.dry_run:

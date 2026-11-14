@@ -184,10 +184,13 @@ export function shareInfo(state, sh) {
   const p = state.prices?.p?.[sh.isin];
   const m = state.stockMeta?.m?.[sh.isin];
   return {
-    name: m?.[2] || p?.[2] || sh.name || sh.isin,
+    // Current name from NSE's company list (follows renames, mergers and demergers); then the name the
+    // broker gave at import (ETFs aren't in that list, and the exchange's ETF names are codes); then
+    // the price file's abbreviated name.
+    name: m?.[2] || sh.name || p?.[2] || sh.isin,
     symbol: p?.[1] || '',
     cap: CAP_NAMES[m?.[0]] || 'Unclassified',
-    sector: sh.sectorOverride || m?.[1] || 'Other',
+    sector: sh.sectorOverride || m?.[1] || (/^INF/.test(sh.isin || '') ? 'ETF' : 'Other'),
   };
 }
 
