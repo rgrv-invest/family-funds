@@ -117,3 +117,13 @@ test('All view: totals add up, XIRR merges funds and shares, Shares slice', () =
   assert.equal(noShares.xirr, f.xirr);
   assert.equal(noShares.invested, f.invested);
 });
+
+test('share names: NSE current name, then the broker name (ETFs), then the price file; ETFs get an ETF sector', async () => {
+  const { shareInfo } = await import('../js/calc.js');
+  const state = { prices: { p: { INE758E01017: [227.5, 'JIOFIN', 'JIO FIN SERVICES LTD'], INF109KB15Y7: [115.77, 'ICICIB22', 'ICICIPRAMC - BHARATIWIN'] } },
+    stockMeta: { m: { INE758E01017: ['L', 'Financial Services', 'Jio Financial Services Ltd'] } } };
+  assert.deepEqual(shareInfo(state, { isin: 'INE758E01017', name: 'Reliance Strategic Investments' }), { name: 'Jio Financial Services Ltd', symbol: 'JIOFIN', cap: 'Large', sector: 'Financial Services' });
+  assert.deepEqual(shareInfo(state, { isin: 'INF109KB15Y7', name: 'Bharat 22 ETF' }), { name: 'Bharat 22 ETF', symbol: 'ICICIB22', cap: 'Unclassified', sector: 'ETF' });
+  assert.equal(shareInfo(state, { isin: 'INF109KB15Y7' }).name, 'ICICIPRAMC - BHARATIWIN');
+  assert.equal(shareInfo(state, { isin: 'INF109KB15Y7', sectorOverride: 'Diversified' }).sector, 'Diversified');
+});
