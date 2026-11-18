@@ -24,18 +24,18 @@ export const SCHEMES = [
   { code: '118560', name: 'HDFC Corporate Bond Fund', amc: 'HDFC', assetClass: 'Debt', category: 'Corporate Bond', nav: 33.18, cagr: 0.075 },
   { code: '120505', name: 'Axis Short Duration Fund', amc: 'Axis', assetClass: 'Debt', category: 'Short Duration', nav: 32.04, cagr: 0.071 },
   { code: '119132', name: 'Nippon India Gold Savings Fund', amc: 'Nippon India', assetClass: 'Gold', category: 'Gold FoF', nav: 41.76, cagr: 0.17 },
-].map((s) => ({ ...s, navDate: NAV_DATE }));
+].map((s, i) => ({ ...s, navDate: NAV_DATE, prevNav: +(s.nav / (1 + [0.006, -0.004, 0.011, -0.008, 0.002][i % 5])).toFixed(4), prevNavDate: '2026-09-30' }));
 
 // Share prices and stock metadata in the same shape as data/prices.json and data/stock-meta.json.
 const SAMPLE_PRICES = {
   date: NAV_DATE, source: 'NSE',
   p: {
-    INE002A01018: [1324.4, 'RELIANCE', 'RELIANCE INDUSTRIES LTD'],
-    INE040A01034: [798.15, 'HDFCBANK', 'HDFC BANK LTD'],
-    INE009A01021: [1154.1, 'INFY', 'INFOSYS LIMITED'],
-    INE081A01020: [184.85, 'TATASTEEL', 'TATA STEEL LIMITED'],
-    INE006I01046: [1272.8, 'ASTRAL', 'ASTRAL LIMITED'],
-    INE002S01010: [1122.8, 'MGL', 'MAHANAGAR GAS LTD.'],
+    INE002A01018: [1324.4, 'RELIANCE', 'RELIANCE INDUSTRIES LTD', 1310.15],
+    INE040A01034: [798.15, 'HDFCBANK', 'HDFC BANK LTD', 804.6],
+    INE009A01021: [1154.1, 'INFY', 'INFOSYS LIMITED', 1149.0],
+    INE081A01020: [184.85, 'TATASTEEL', 'TATA STEEL LIMITED', 187.2],
+    INE006I01046: [1272.8, 'ASTRAL', 'ASTRAL LIMITED', 1259.4],
+    INE002S01010: [1122.8, 'MGL', 'MAHANAGAR GAS LTD.', 1131.0],
     INE007A01025: [4389.6, 'CRISIL', 'CRISIL LTD'],
     INE00LO01017: [10493.0, 'CRAFTSMAN', 'CRAFTSMAN AUTOMATION LTD'],
   },

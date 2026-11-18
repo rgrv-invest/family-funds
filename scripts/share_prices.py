@@ -4,7 +4,8 @@
 Downloads the exchange "bhavcopy" (end-of-day prices) in the UDiFF format:
   NSE  https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip
   BSE  https://www.bseindia.com/download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_YYYYMMDD_F_0000.CSV
-Columns used: ISIN, TckrSymb (symbol), SctySrs (series), FinInstrmNm (name), ClsPric (close).
+Columns used: ISIN, TckrSymb (symbol), SctySrs (series), FinInstrmNm (name), ClsPric (close),
+PrvsClsgPric (previous trading day's close, adjusted by the exchange for bonuses and splits).
 
 NSE is the source. BSE fills in shares NSE doesn't list (same day), and is used on its own if NSE
 can't be reached. Weekends and holidays have no file, so it walks back day by day.
@@ -91,16 +92,17 @@ def bse_rows(day):
     return read_rows(data.decode('utf-8-sig', errors='replace'), f'BSE {day}')
 
 
-def close_of(row):
+def close_of(row, col='ClsPric'):
     try:
-        v = float(row['ClsPric'])
+        v = float(row.get(col))
     except (TypeError, ValueError):
         return None
     return round(v, 2) if v > 0 else None
 
 
 def pick(rows, include, series_rank=None):
-    """ISIN -> [close, symbol, name] for company shares (and any ISIN in the include list)."""
+    """ISIN -> [close, symbol, name, previous close or None] for company shares (and any ISIN in the
+    include list)."""
     out, rank = {}, {}
     for r in rows:
         isin = (r.get('ISIN') or '').strip()
@@ -115,7 +117,7 @@ def pick(rows, include, series_rank=None):
             continue
         if isin in out and rank[isin] <= r_rank:
             continue
-        out[isin] = [close, r['TckrSymb'].strip(), ' '.join(r['FinInstrmNm'].split())]
+        out[isin] = [close, r['TckrSymb'].strip(), ' '.join(r['FinInstrmNm'].split()), close_of(r, 'PrvsClsgPric')]
         rank[isin] = r_rank
     return out
 
@@ -176,7 +178,7 @@ def build(start, days, include):
     return {
         'date': day.isoformat(),
         'source': source,
-        'note': 'p: ISIN -> [close, symbol, name] (4th item "B": BSE price, not listed on NSE)',
+        'note': 'p: ISIN -> [close, symbol, name, previous close or null] (5th item "B": BSE price, not listed on NSE)',
         'count': len(prices),
         'p': dict(sorted(prices.items())),
     }

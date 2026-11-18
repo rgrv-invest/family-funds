@@ -94,8 +94,11 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     await Promise.all(stale.map(async (s) => {
       try {
         const fresh = await fetchScheme(s.code);
-        // Every signed-in family member may refresh NAVs (see firestore.rules).
-        await updateDoc(doc(db, 'schemes', s.code), { nav: fresh.nav, navDate: fresh.navDate, checkedOn: new Date(now).toISOString() });
+        // Every signed-in family member may refresh NAVs (see firestore.rules). If the published rules
+        // predate the previous-NAV fields, a viewer's update is refused: save the NAV without them.
+        const base = { nav: fresh.nav, navDate: fresh.navDate, checkedOn: new Date(now).toISOString() };
+        await updateDoc(doc(db, 'schemes', s.code), { ...base, prevNav: fresh.prevNav, prevNavDate: fresh.prevNavDate })
+          .catch(() => updateDoc(doc(db, 'schemes', s.code), base));
       } catch (e) { console.warn('NAV refresh failed for', s.code, e); }
     }));
     refreshing = false;

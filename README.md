@@ -19,7 +19,13 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 - **NAVs and scheme data** come from mfapi.in (AMFI data) in the browser: search, latest NAV,
   NAV history (used to estimate units when left blank). Until a scheme has today's NAV (AMFI
   publishes in the evening, IST) the app re-checks it at most every 3 hours: on load, when the
-  tab comes back into view, and every hour while open. Whoever has the app open does it.
+  tab comes back into view, and every hour while open. Whoever has the app open does it. Each
+  refresh also saves the NAV before the latest one (`prevNav`, `prevNavDate`) for the day's change.
+- **Day's change** (summary banner, every holdings table, folio cards): the move from the previous
+  NAV / close to the latest one, on the units held through it. Units bought on the latest day add
+  nothing yet; units sold on it are no longer counted. The percentage is against the value at the
+  previous price. Funds and shares each use their own latest day (NAVs come out in the evening,
+  share prices after the close).
 - **Gains and sales:** Invested is the FIFO cost of the units still held, so Gain / loss is current
   value minus that cost; selling units reduces both. A folio whose units are all sold moves to
   **Closed folios** (sidebar), which shows what was bought and sold, the realised gain and XIRR.
@@ -41,7 +47,7 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 
 - **Prices:** a GitHub Action (`.github/workflows/share-prices.yml`, weekdays 19:07 and 21:37 IST,
   or run by hand) downloads NSE's end-of-day "bhavcopy" (UDiFF format) and saves `data/prices.json`:
-  `p: { ISIN: [close, symbol, name] }` plus the price `date` and `source`. BSE's bhavcopy fills in
+  `p: { ISIN: [close, symbol, name, previous close] }` plus the price `date` and `source`. BSE's bhavcopy fills in
   shares NSE doesn't list (marked `"B"`), and is used on its own if NSE fails. Weekends and holidays
   have no file, so it walks back day by day. Only company shares are kept (ISIN `INE….01…`, equity
   series); add other ISINs (an ETF, a REIT) to `data/include-isins.txt`. On failure nothing is
