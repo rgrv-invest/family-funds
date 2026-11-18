@@ -1,12 +1,15 @@
 # Daily share prices: downloads NSE's end-of-day bhavcopy (BSE as fallback) into data/prices.json.
-# Runs on weekdays after market close, with a later retry in case NSE publishes late.
+# Runs every day at 9 am and 9 pm IST: the evening run picks up that day's prices (NSE publishes
+# them after the close), and the morning run catches anything published late. On days with no new
+# file (weekends, holidays) nothing changes and nothing is committed. GitHub can start scheduled
+# runs a few minutes late.
 # On a pull request that changes the script it only checks the download works (nothing is committed).
 name: Share prices
 
 on:
   schedule:
-    - cron: '37 13 * * 1-5'   # 19:07 IST, Mon–Fri
-    - cron: '7 16 * * 1-5'    # 21:37 IST retry
+    - cron: '30 3 * * *'    # 09:00 IST, every day
+    - cron: '30 15 * * *'   # 21:00 IST, every day
   workflow_dispatch:
   pull_request:
     paths:
