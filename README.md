@@ -45,7 +45,7 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 
 ### Shares
 
-- **Prices:** a GitHub Action (`.github/workflows/share-prices.yml`, weekdays 19:07 and 21:37 IST,
+- **Prices:** a GitHub Action (`.github/workflows/share-prices.yml`, every day at 9 am and 9 pm IST,
   or run by hand) downloads NSE's end-of-day "bhavcopy" (UDiFF format) and saves `data/prices.json`:
   `p: { ISIN: [close, symbol, name, previous close] }` plus the price `date` and `source`. BSE's bhavcopy fills in
   shares NSE doesn't list (marked `"B"`), and is used on its own if NSE fails. Weekends and holidays
@@ -170,7 +170,7 @@ editors see a banner saying so.
 - **Did it run, and succeed?** **Actions** tab → **Share prices**. Each run is listed with a green
   tick (worked) or red cross (failed). Click a run → **prices** to see the log, and scroll to the
   summary: "Share prices for <date> (NSE) … N shares". "No change" means the day's file wasn't out
-  yet (the 21:37 retry picks it up) or nothing changed.
+  yet (the next morning's 9 am run picks it up) or nothing changed (weekends, holidays).
 - **In the app:** the sidebar shows "Share prices as of <date>", normally the last trading day.
 - If GitHub ever pauses the schedule (it does after 60 days without activity in the repository),
   the **Actions** tab shows a banner with an **Enable workflow** button.
