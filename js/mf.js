@@ -37,9 +37,14 @@ export async function searchSchemes(q) {
   return rows.slice(0, 40).map((r) => ({ code: String(r.schemeCode), name: r.schemeName }));
 }
 
+// The last few weeks of NAVs (newest first) give the latest NAV and the one before it, for the
+// day's change. A scheme with no NAV in that window (wound up, say) falls back to its latest NAV.
+const ymd = (t) => new Date(t).toISOString().slice(0, 10);
 export async function fetchScheme(code) {
-  const d = await json(`${API}/${code}/latest`);
+  let d = await json(`${API}/${code}?startDate=${ymd(Date.now() - 30 * 864e5)}&endDate=${ymd(Date.now() + 864e5)}`).catch(() => null);
+  if (!d?.meta || !d.data?.length) d = await json(`${API}/${code}/latest`);
   if (!d?.meta || !d.data?.length) throw new Error(`No data found for scheme ${code}`);
+  const prev = d.data[1] && +d.data[1].nav > 0 ? d.data[1] : null;
   const { assetClass, category } = classify(d.meta.scheme_name, d.meta.scheme_category);
   return {
     code: String(code),
@@ -51,15 +56,17 @@ export async function fetchScheme(code) {
     isin: d.meta.isin_growth || d.meta.isin_div_reinvestment || null,
     nav: +d.data[0].nav,
     navDate: isoDate(d.data[0].date),
+    prevNav: prev ? +prev.nav : null,
+    prevNavDate: prev ? isoDate(prev.date) : null,
   };
 }
 
 // Does this scheme's stored NAV need checking? AMFI publishes each day's NAVs that evening (IST),
-// so until a scheme has today's NAV it's re-checked, at most every 3 hours.
+// so until a scheme has today's NAV (and the one before it) it's re-checked, at most every 3 hours.
 // checkedOn holds the time of the last check (older entries hold just a date).
 export const istToday = (now = Date.now()) => new Date(now + 5.5 * 3600e3).toISOString().slice(0, 10);
 export function needsNav(s, now = Date.now()) {
-  if (s.navDate && s.navDate >= istToday(now)) return false;
+  if (s.navDate && s.navDate >= istToday(now) && s.prevNav != null) return false;
   const last = Date.parse(s.checkedOn || '');
   return !(now - last < 3 * 3600e3);
 }

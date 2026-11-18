@@ -92,15 +92,31 @@ export function holdingStats(h, scheme, navDate) {
   const units = lots.reduce((s, l) => s + l.units, 0);
   const invested = lots.reduce((s, l) => s + l.cost, 0);
   const current = units * scheme.nav;
+  const day = dayMove(units, h.txns.filter((t) => t.date < scheme.navDate).reduce((a, t) => a + t.units, 0), scheme.nav, scheme.prevNav);
   const lastBuy = buys.reduce((m, b) => (!b.reversed && b.date > m ? b.date : m), '') || null;
   const heldFlows = lots.filter((l) => l.units > 1e-9).map((l) => ({ date: l.date, amount: -l.cost }));
-  return { units, invested, current, flows, heldFlows, navDate, lastBuy, bought, sold, lastSale };
+  return { units, invested, current, flows, heldFlows, navDate, lastBuy, bought, sold, lastSale, dayChange: day.change, dayPrev: day.prev };
 }
+
+// The day's change: the move from the previous NAV / close to the latest one, on the units held
+// through it (held before the latest day and still held now). Bought on the latest day: no change
+// yet; sold on it: no longer held. null when there's no previous price.
+function dayMove(now, before, price, prevPrice) {
+  if (prevPrice == null || !(prevPrice > 0) || price == null) return { change: null, prev: null };
+  const held = Math.max(0, Math.min(now, before));
+  return { change: held * (price - prevPrice), prev: held * prevPrice };
+}
+// Adds up day changes; pct against the value at the previous price. null when nothing has one.
+function addDay(acc, change, prev) {
+  if (change == null) return acc;
+  return { change: (acc.change || 0) + change, prev: (acc.prev || 0) + prev };
+}
+const dayPct = (d) => (d.change != null && d.prev > 0 ? d.change / d.prev : null);
 
 // Aggregate a list of holdings into totals, XIRR and breakups.
 export function summarize(holdings, state) {
   const schemeBy = Object.fromEntries(state.schemes.map((s) => [s.code, s]));
-  let invested = 0, current = 0, held = 0;
+  let invested = 0, current = 0, held = 0, day = { change: null, prev: null };
   const flows = [];
   const byAsset = {}, byCategory = {};
   for (const h of holdings) {
@@ -109,6 +125,7 @@ export function summarize(holdings, state) {
     const st = holdingStats(h, s, state.navDate);
     invested += st.invested;
     current += st.current;
+    day = addDay(day, st.dayChange, st.dayPrev);
     if (st.units > 1e-6) held++;
     // XIRR covers only the units still held, like Gain / loss: sold units and their sales are left out.
     flows.push(...st.heldFlows);
@@ -130,6 +147,7 @@ export function summarize(holdings, state) {
     gain: current - invested,
     gainPct: invested ? (current - invested) / invested : 0,
     xirr: r,
+    dayChange: day.change, dayPrev: day.prev, dayPct: dayPct(day),
     byAsset: toList(byAsset),
     byCategory: toList(byCategory),
     count: held,
@@ -180,6 +198,11 @@ const FREE = new Set(['bonus', 'split']);
 export const CAP_NAMES = { L: 'Large', M: 'Mid', S: 'Small' };
 
 export const priceOf = (state, isin) => state.prices?.p?.[isin]?.[0] ?? null;
+// Previous trading day's close (4th item; older price files don't have it).
+export const prevPriceOf = (state, isin) => {
+  const v = state.prices?.p?.[isin]?.[3];
+  return typeof v === 'number' ? v : null;
+};
 export function shareInfo(state, sh) {
   const p = state.prices?.p?.[sh.isin];
   const m = state.stockMeta?.m?.[sh.isin];
@@ -194,8 +217,8 @@ export function shareInfo(state, sh) {
   };
 }
 
-// Stats for one share. valueDate: the price date.
-export function shareStats(sh, price, valueDate) {
+// Stats for one share. valueDate: the price date; prevPrice: the previous trading day's close.
+export function shareStats(sh, price, valueDate, prevPrice = null) {
   const txns = [...(sh.txns || [])].sort((a, b) => (a.date || '').localeCompare(b.date || '') || b.qty - a.qty);
   let lots = [];
   let lastSale = null, firstBought = null;
@@ -218,6 +241,9 @@ export function shareStats(sh, price, valueDate) {
   const invested = known ? lots.reduce((a, l) => a + l.cost, 0) : null;
   const current = held && price != null ? qty * price : null;
   const gain = invested != null && current != null ? current - invested : null;
+  // Undated holdings (an opening balance) count as held before the price date.
+  const before = (sh.txns || []).filter((t) => !t.date || !valueDate || t.date < valueDate).reduce((a, t) => a + t.qty, 0);
+  const day = held ? dayMove(qty, before, price, prevPrice) : { change: null, prev: null };
 
   // XIRR: each held lot's cost on its date, dividends since the first held lot, today's value.
   const costed = lots.filter((l) => l.cost > 0);
@@ -239,6 +265,7 @@ export function shareStats(sh, price, valueDate) {
     gainPct: gain != null && invested ? gain / invested : null,
     avgPrice: invested != null && held ? invested / qty : null,
     xirr: rate, xirrNote, flows, start,
+    dayChange: day.change, dayPrev: day.prev, dayPct: dayPct(day),
     hasDividends: divs.length > 0,
     firstBought, lastSale,
   };
@@ -248,16 +275,17 @@ export function shareStats(sh, price, valueDate) {
 // without a price count nowhere. XIRR covers shares with a known cost and dated purchases.
 export function summarizeShares(shares, state) {
   const valueDate = state.prices?.date || state.navDate;
-  let invested = 0, current = 0, gain = 0, held = 0, missingCost = 0, noPrice = 0, divs = false;
+  let invested = 0, current = 0, gain = 0, held = 0, missingCost = 0, noPrice = 0, divs = false, day = { change: null, prev: null };
   const flows = [];
   let xirrValue = 0;
   const byCap = {}, bySector = {};
   for (const sh of shares) {
-    const st = shareStats(sh, priceOf(state, sh.isin), valueDate);
+    const st = shareStats(sh, priceOf(state, sh.isin), valueDate, prevPriceOf(state, sh.isin));
     if (!st.held) continue;
     held++;
     if (st.current == null) { noPrice++; continue; }
     current += st.current;
+    day = addDay(day, st.dayChange, st.dayPrev);
     const info = shareInfo(state, sh);
     byCap[info.cap] = (byCap[info.cap] || 0) + st.current;
     bySector[info.sector] = (bySector[info.sector] || 0) + st.current;
@@ -272,6 +300,7 @@ export function summarizeShares(shares, state) {
   return {
     invested, current, gain, gainPct: invested ? gain / invested : 0,
     xirr: x.xirr, xirrNote: x.note, hasDividends: divs,
+    dayChange: day.change, dayPrev: day.prev, dayPct: dayPct(day),
     count: held, missingCost, noPrice,
     byCap: toList(byCap), bySector: toList(bySector),
     flows, xirrValue, valueDate,
@@ -305,6 +334,7 @@ export function summarizeAll(holdings, shares, state) {
     invested, current, gain, gainPct: invested ? gain / invested : 0,
     xirr: s.flows.length ? x.xirr : f.xirr, xirrNote: s.flows.length ? x.note : null,
     hasDividends: s.hasDividends,
+    ...(() => { const d = addDay(addDay({ change: null, prev: null }, f.dayChange, f.dayPrev), s.dayChange, s.dayPrev); return { dayChange: d.change, dayPrev: d.prev, dayPct: dayPct(d) }; })(),
     byAsset, byCategory: f.byCategory, // fund categories: share of fund value
     count: f.count + s.count, missingCost: s.missingCost, noPrice: s.noPrice,
     funds: f, shares: s,

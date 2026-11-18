@@ -1,9 +1,9 @@
 import {
   summarize, schemeSummary, holdingsOfFolios, foliosOfPortfolio, portfoliosOfMember, foliosOfMember, holdingStats,
-  folioClosed, xirr, shareStats, summarizeShares, summarizeAll, shareInfo, priceOf, sharesOfPortfolio, sharesOfMember, shareHeld,
+  folioClosed, xirr, shareStats, summarizeShares, summarizeAll, shareInfo, priceOf, prevPriceOf, sharesOfPortfolio, sharesOfMember, shareHeld,
 } from './calc.js';
 import {
-  rupees, compact, pct, signedPct, signedRupees, tone, date, esc, fmtNav, fmtUnits,
+  rupees, compact, pct, signedPct, signedRupees, tone, date, shortDate, esc, fmtNav, fmtUnits,
 } from './format.js';
 import { readCas, normFolio, txnKey } from './cas.js';
 import { readDematCas, planDematImport, dematWrites } from './cas-demat.js';
@@ -69,6 +69,8 @@ const dematLabel = (d) => (d ? `${d.broker || 'Demat'} ··${String(d.clientId |
 const heldShares = (sh) => sh.filter(shareHeld);
 const unassignedShares = (s) => s.shares.filter((x) => !x.portfolioId || !portfolioById(s, x.portfolioId));
 const soldShares = (s) => s.shares.filter((x) => !shareHeld(x) && (x.txns || []).length);
+// Day's change cell: rupees with the percentage under it, or a dash before there's a previous price.
+const dayCell = (chg, pc, label = '') => `<td class="num ${tone(chg)}"${label ? ` data-l="${label}"` : ''}>${chg == null ? '<span class="muted">—</span>' : `${signedRupees(chg)}<div class="row-sub">${signedPct(pc, 2)}</div>`}</td>`;
 const xirrText = (x, note) => (note === 'young' ? '< 1 yr' : x == null ? '—' : signedPct(x));
 // Remembered on this device, like column sorting. Without shares there's nothing to switch: funds only.
 let viewPref = 'all';
@@ -167,7 +169,19 @@ function kpis(sum, v = 'mf') {
       <div class="kpi-sub muted">${sum.xirrNote === 'young' ? 'held under a year' : 'annualised'}${sum.hasDividends ? ' · incl. dividends' : ''}</div></div>
     <div class="kpi"><div class="kpi-label">Gain / loss</div><div class="kpi-value ${tone(sum.gain)}">${signedRupees(sum.gain)}</div>
       <div class="kpi-sub ${tone(sum.gain)}">${sum.gain >= 0 ? '▲' : '▼'} ${signedPct(sum.gainPct)} absolute</div></div>
+    <div class="kpi"><div class="kpi-label">Day’s change</div>${sum.dayChange == null
+      ? '<div class="kpi-value muted">—</div><div class="kpi-sub muted">after the next price update</div>'
+      : `<div class="kpi-value ${tone(sum.dayChange)}">${signedRupees(sum.dayChange)}</div>
+      <div class="kpi-sub ${tone(sum.dayChange)}">${sum.dayChange >= 0 ? '▲' : '▼'} ${signedPct(sum.dayPct, 2)} <span class="muted">${dayNote(sum, v)}</span></div>`}</div>
   </section>`;
+}
+// What the day's change compares: the latest NAV / close against the one before it.
+function dayNote(sum, v) {
+  const s = store.get();
+  const fundDays = v !== 'shares' ? [...new Set(s.schemes.filter((x) => x.prevNavDate).map((x) => x.navDate))].sort() : [];
+  const priceDay = v !== 'mf' && s.prices?.date;
+  const days = [...new Set([...fundDays.slice(-1), ...(priceDay ? [priceDay] : [])])];
+  return days.length === 1 ? `on ${shortDate(days[0])}` : 'latest day';
 }
 
 // Pie chart (SVG). Slices separated by a 2px surface-coloured gap.
@@ -229,13 +243,14 @@ function summaryTable(rows, total, firstCol) {
   if (!rows.length) return `<div class="card"><div class="card-b empty">Nothing here yet.</div></div>`;
   return `
   <div class="card table-wrap"><table>
-    <thead><tr><th>${firstCol}</th><th>Invested</th><th>Current value</th><th>XIRR</th><th>Gain</th><th>Share</th></tr></thead>
+    <thead><tr><th>${firstCol}</th><th>Invested</th><th>Current value</th><th>Day’s change</th><th>XIRR</th><th>Gain</th><th>Share</th></tr></thead>
     <tbody>
       ${rows.map((r) => `
         <tr class="clickable" data-go="${r.href}">
           <td><div class="row-title">${esc(r.name)}</div><div class="row-sub">${esc(r.sub)}</div></td>
           <td class="num">${rupees(r.sum.invested)}</td>
           <td class="num">${rupees(r.sum.current)}</td>
+          ${dayCell(r.sum.dayChange, r.sum.dayPct)}
           <td class="num ${r.sum.xirrNote ? '' : tone(r.sum.xirr)}">${xirrText(r.sum.xirr, r.sum.xirrNote)}</td>
           <td class="num ${tone(r.sum.gain)}">${signedRupees(r.sum.gain)}<div class="row-sub">${signedPct(r.sum.gainPct)}</div></td>
           <td class="num"><span class="alloc">${pct(total ? r.sum.current / total : 0, 0)}
@@ -288,7 +303,7 @@ function sortHead(list, key, label) {
 }
 const HOLDING_SORT = {
   name: (r) => r.scheme.name, units: (r) => r.units, nav: (r) => r.scheme.nav, invested: (r) => r.sum.invested,
-  current: (r) => r.sum.current, xirr: (r) => r.sum.xirr, gain: (r) => r.sum.gain, share: (r) => r.sum.current,
+  current: (r) => r.sum.current, day: (r) => r.sum.dayChange, xirr: (r) => r.sum.xirr, gain: (r) => r.sum.gain, share: (r) => r.sum.current,
 };
 
 function holdingsTable(s, holdings, total, title = 'Holdings') {
@@ -297,7 +312,7 @@ function holdingsTable(s, holdings, total, title = 'Holdings') {
   return `
   <div class="section-title"><h2>${title}</h2><span class="muted" style="font-size:12.5px">${rows.length} scheme${rows.length === 1 ? '' : 's'}, combined across folios</span></div>
   <div class="card table-wrap"><table class="holdings">
-    <thead><tr>${[['name', 'Scheme'], ['units', 'Units'], ['nav', 'NAV'], ['invested', 'Invested'], ['current', 'Current value'], ['xirr', 'XIRR'], ['gain', 'Gain'], ['share', 'Share']]
+    <thead><tr>${[['name', 'Scheme'], ['units', 'Units'], ['nav', 'NAV'], ['invested', 'Invested'], ['current', 'Current value'], ['day', 'Day’s change'], ['xirr', 'XIRR'], ['gain', 'Gain'], ['share', 'Share']]
       .map(([k, l]) => `<th${sorts.holdings?.key === k ? ` aria-sort="${sorts.holdings.dir > 0 ? 'ascending' : 'descending'}"` : ''}>${sortHead('holdings', k, l)}</th>`).join('')}</tr></thead>
     <tbody>
       ${rows.map((r) => `
@@ -308,6 +323,7 @@ function holdingsTable(s, holdings, total, title = 'Holdings') {
           <td class="num">${fmtNav(r.scheme.nav)}</td>
           <td class="num">${rupees(r.sum.invested)}</td>
           <td class="num">${rupees(r.sum.current)}</td>
+          ${dayCell(r.sum.dayChange, r.sum.dayPct)}
           <td class="num ${tone(r.sum.xirr)}">${r.sum.xirr == null ? '—' : signedPct(r.sum.xirr)}</td>
           <td class="num ${tone(r.sum.gain)}">${signedRupees(r.sum.gain)}<div class="row-sub">${signedPct(r.sum.gainPct)}</div></td>
           <td class="num"><span class="alloc">${pct(total ? r.sum.current / total : 0, 0)}
@@ -319,7 +335,7 @@ function holdingsTable(s, holdings, total, title = 'Holdings') {
 // ---------- shares table ----------
 const SHARE_SORT = {
   name: (r) => r.info.name, qty: (r) => r.st.qty, price: (r) => r.price, invested: (r) => r.st.invested,
-  current: (r) => r.st.current, xirr: (r) => r.st.xirr, gain: (r) => r.st.gain, share: (r) => r.st.current,
+  current: (r) => r.st.current, day: (r) => r.st.dayChange, xirr: (r) => r.st.xirr, gain: (r) => r.st.gain, share: (r) => r.st.current,
 };
 function shareMoveSelect(s, sh) {
   return moveSelect(s, { id: sh.id, portfolioId: sh.portfolioId, folioNo: '' }).replace('data-move=', 'data-move-share=').replace(/aria-label="[^"]*"/, 'aria-label="Move share to portfolio"');
@@ -331,12 +347,12 @@ function sharesTable(s, shares, total, { movable = false, title = 'Shares' } = {
   const valueDate = s.prices?.date || s.navDate;
   const rows = sortBy(held.map((sh) => {
     const price = priceOf(s, sh.isin);
-    return { sh, price, info: shareInfo(s, sh), st: shareStats(sh, price, valueDate), demat: dematById(s, sh.dematId) };
+    return { sh, price, info: shareInfo(s, sh), st: shareStats(sh, price, valueDate, prevPriceOf(s, sh.isin)), demat: dematById(s, sh.dematId) };
   }), sorts.shares, (r, k) => SHARE_SORT[k]?.(r));
   const needPrice = rows.filter((r) => r.st.invested == null).length;
   const noPrice = rows.filter((r) => r.price == null).length;
   const edit = canEdit();
-  const head = [['name', 'Share'], ['qty', 'Qty'], ['price', 'Avg buy / Last'], ['invested', 'Invested'], ['current', 'Current value'], ['xirr', 'XIRR'], ['gain', 'Gain'], ['share', 'Share']];
+  const head = [['name', 'Share'], ['qty', 'Qty'], ['price', 'Avg buy / Last'], ['invested', 'Invested'], ['current', 'Current value'], ['day', 'Day’s change'], ['xirr', 'XIRR'], ['gain', 'Gain'], ['share', 'Share']];
   return `
   <div class="section-title"><h2>${title}</h2><span class="muted" style="font-size:12.5px">${plural(rows.length, 'share')}${s.prices ? ` · prices as of ${date(s.prices.date)}` : ''}</span></div>
   ${needPrice ? `<div class="notice">${plural(needPrice, 'share')} ${needPrice === 1 ? 'needs' : 'need'} a buy price. Until then ${needPrice === 1 ? 'it counts' : 'they count'} in current value only, not in invested, gain or XIRR.${edit ? ' Use “Add buy price” on the row.' : ''}</div>` : ''}
@@ -354,6 +370,7 @@ function sharesTable(s, shares, total, { movable = false, title = 'Shares' } = {
             <div class="row-sub">${price != null ? fmtNav(price) : 'No price'}</div></td>
           <td class="num" data-l="Invested">${st.invested != null ? rupees(st.invested) : '<span class="muted">—</span>'}</td>
           <td class="num" data-l="Current">${st.current != null ? rupees(st.current) : '<span class="muted">—</span>'}</td>
+          ${dayCell(st.dayChange, st.dayPct, 'Day’s change')}
           <td class="num ${st.xirrNote ? '' : tone(st.xirr)}" data-l="XIRR">${xirrText(st.xirr, st.xirrNote)}${st.hasDividends && st.xirr != null ? '<div class="row-sub">incl. dividends</div>' : ''}</td>
           <td class="num ${tone(st.gain)}" data-l="Gain">${st.gain != null ? `${signedRupees(st.gain)}<div class="row-sub">${signedPct(st.gainPct)}</div>` : '<span class="muted">—</span>'}</td>
           <td class="num" data-l="Share"><span class="alloc">${pct(total && st.current ? st.current / total : 0, 0)}
@@ -417,7 +434,7 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
           <span class="chip">${esc(f.amc)}</span>
           <span class="chip">Holder: ${esc(holderOf(s, f))}</span>
           ${showPortfolio ? `<span class="chip">${p ? esc(p.name) : 'Unassigned'}</span>` : ''}
-          <span class="muted" style="font-size:12.5px">${rupees(sum.current)} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
+          <span class="muted" style="font-size:12.5px">${rupees(sum.current)}${sum.dayChange != null ? ` · <span class="${tone(sum.dayChange)}">Day ${signedRupees(sum.dayChange)}</span>` : ''} · <span class="${tone(sum.xirr)}">XIRR ${sum.xirr == null ? '—' : signedPct(sum.xirr)}</span></span>
         </div>
         <div class="schemes with-date">
           <div class="scheme scheme-head"><span class="sn">${sortHead('folios', 'name', 'Scheme')}</span><span>${sortHead('folios', 'lastBuy', 'Last purchase')}</span><span>${sortHead('folios', 'units', 'Units')}</span><span>${sortHead('folios', 'invested', 'Invested')}</span><span>${sortHead('folios', 'current', 'Current')}</span><span>${sortHead('folios', 'gain', 'Gain')}</span></div>

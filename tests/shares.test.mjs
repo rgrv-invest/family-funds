@@ -127,3 +127,34 @@ test('share names: NSE current name, then the broker name (ETFs), then the price
   assert.equal(shareInfo(state, { isin: 'INF109KB15Y7' }).name, 'ICICIPRAMC - BHARATIWIN');
   assert.equal(shareInfo(state, { isin: 'INF109KB15Y7', sectorOverride: 'Diversified' }).sector, 'Diversified');
 });
+
+test("day's change: units held through the day × the move; bought today counts nothing; totals add up", async () => {
+  const { holdingStats, summarize, prevPriceOf } = await import('../js/calc.js');
+  const scheme = { code: 'f1', nav: 102, navDate: '2026-11-17', prevNav: 100, prevNavDate: '2026-11-16' };
+  const h = { schemeCode: 'f1', folioId: 'x', txns: [
+    { date: '2026-01-10', units: 50, amount: 4000 },
+    { date: '2026-11-17', units: 10, amount: 1020 }] }; // bought on the latest NAV day
+  const st = holdingStats(h, scheme, '2026-11-17');
+  assert.equal(st.dayChange, 50 * 2);
+  assert.equal(st.dayPrev, 50 * 100);
+  assert.equal(holdingStats(h, { ...scheme, prevNav: undefined }, '2026-11-17').dayChange, null);
+
+  const state = {
+    navDate: '2026-11-17', schemes: [scheme], holdings: [h],
+    prices: { date: '2026-11-17', p: { INE002A01018: [1367, 'RELIANCE', 'RELIANCE', 1344.8], INE009A01021: [1130, 'INFY', 'INFOSYS', 1145.1], INE040A01034: [815, 'HDFCBANK', 'HDFC BANK'] } },
+  };
+  assert.equal(prevPriceOf(state, 'INE040A01034'), null); // older price file: no previous close
+  const shares = [
+    { isin: 'INE002A01018', txns: [{ date: null, qty: 100, price: 900, kind: 'opening' }] },
+    { isin: 'INE009A01021', txns: [{ date: '2024-01-01', qty: 40, price: 1400, kind: 'buy' }, { date: '2026-11-17', qty: -10, price: 1130, kind: 'sell' }] },
+    { isin: 'INE040A01034', txns: [{ date: '2024-01-01', qty: 10, price: 700, kind: 'buy' }] },
+  ];
+  const ss = summarizeShares(shares, state);
+  const rel = 100 * (1367 - 1344.8), infy = 30 * (1130 - 1145.1); // sold today: only the 30 kept
+  assert.ok(Math.abs(ss.dayChange - (rel + infy)) < 1e-6);
+  assert.ok(Math.abs(ss.dayPct - (rel + infy) / (100 * 1344.8 + 30 * 1145.1)) < 1e-12);
+  const all = summarizeAll(state.holdings, shares, state);
+  assert.ok(Math.abs(all.dayChange - (100 + rel + infy)) < 1e-6);
+  assert.equal(summarize(state.holdings, state).dayChange, 100);
+  assert.equal(summarizeShares([shares[2]], state).dayChange, null);
+});
