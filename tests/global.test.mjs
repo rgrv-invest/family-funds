@@ -21,6 +21,12 @@ test('codes, lookups on or before a date, rupee NAV = dollar NAV × that day’s
   assert.deepEqual(searchGlobal(G, 'dsp global equity').map((x) => x.code), ['gift:DGEQ-A']);
   assert.deepEqual(searchGlobal(G, 'gift city'), [{ code: 'gift:DGEQ-A', name: G.funds[0].name }]);
   assert.deepEqual(searchGlobal(G, 'parag'), []);
+  // Typed as on DSP's statement, with its punctuation; the class letter picks the class.
+  const two = { ...G, funds: [...G.funds, { ...G.funds[0], code: 'gift:DGEQ-B', name: 'DSP Global Equity Fund – Class B (Direct)' }] };
+  for (const q of ['DSP Global Equity Fund- Class A', 'DSP Global Equity Fund - Class A', 'dsp global equity class-a', 'Global Equity Fund Class A Regular']) {
+    assert.deepEqual(searchGlobal(two, q).map((x) => x.code), ['gift:DGEQ-A'], q);
+  }
+  assert.deepEqual(searchGlobal(two, 'dsp glo').map((x) => x.code), ['gift:DGEQ-A', 'gift:DGEQ-B']);
 });
 
 test('latest and previous rupee NAVs feed valuation and the day’s change (currency moves included)', () => {
