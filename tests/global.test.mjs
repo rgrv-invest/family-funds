@@ -25,7 +25,13 @@ test('codes, lookups on or before a date, rupee NAV = dollar NAV × that day’s
 
 test('latest and previous rupee NAVs feed valuation and the day’s change (currency moves included)', () => {
   const q = globalQuote(G, 'gift:DGEQ-A');
-  assert.deepEqual(q, { nav: 9.04 * 93.48, navDate: '2026-11-17', navUsd: 9.04, usdInr: 93.48, prevNav: 9.163 * 93.93, prevNavDate: '2026-11-16' });
+  // The NAV of 17 Nov is converted at the rate of 17 Nov (not the latest rate), and 16 Nov at 16 Nov's.
+  assert.deepEqual(q, { nav: 9.04 * 93.48, navDate: '2026-11-17', navUsd: 9.04, usdInr: 93.48, usdInrDate: '2026-11-17', prevNav: 9.163 * 93.93, prevNavDate: '2026-11-16' });
+  const later = { ...G, usdInr: [...G.usdInr, ['2026-11-18', 93.44], ['2026-11-19', 93.3]] };
+  assert.equal(globalQuote(later, 'gift:DGEQ-A').usdInr, 93.48);
+  // No ECB rate on the NAV's day (a holiday): the last rate before it, with its date.
+  const holiday = { ...G, usdInr: G.usdInr.filter(([d]) => d !== '2026-11-17') };
+  assert.deepEqual([globalQuote(holiday, 'gift:DGEQ-A').usdInr, globalQuote(holiday, 'gift:DGEQ-A').usdInrDate], [93.93, '2026-11-16']);
   const [stored, other] = withGlobal([{ code: 'gift:DGEQ-A', name: 'x' }, { code: '122639', nav: 92.41 }], G);
   assert.equal(stored.nav, q.nav);
   assert.equal(other.nav, 92.41);

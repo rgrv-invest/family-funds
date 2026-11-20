@@ -272,6 +272,17 @@ function moveSelect(s, f) {
   return `<select data-move="${f.id}" aria-label="Move folio ${esc(f.folioNo)} to portfolio">${opts}</select>`;
 }
 
+// GIFT City funds: how the rupee NAV was worked out, and how old it is (DSP publishes NAVs a few
+// days late, so the value is as of that day, not today).
+function giftNavNote(sc) {
+  if (sc.navUsd == null || !sc.navDate) return '';
+  const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const days = Math.round((Date.parse(today) - Date.parse(sc.navDate)) / 864e5);
+  const ago = days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`;
+  const fxDay = sc.usdInrDate && sc.usdInrDate !== sc.navDate ? ` (rate of ${shortDate(sc.usdInrDate)}, the last before it)` : ` (rate of the same day)`;
+  return `<small class="gift-note">US$${sc.navUsd} × ₹${sc.usdInr}${fxDay}. Valued at the NAV of ${date(sc.navDate)}, ${ago}: DSP publishes GIFT City NAVs a few days late, so this isn’t today’s value.</small>`;
+}
+
 // ---------- sorting ----------
 // Holdings table and folio list sort by column. Clicking a header sorts (largest first, or A–Z for
 // names), clicking again reverses, and a third click goes back to the default order.
@@ -321,7 +332,7 @@ function holdingsTable(s, holdings, total, title = 'Holdings') {
           <td><div class="row-title">${esc(r.scheme.name)}</div>
             <div class="row-sub"><i class="swatch-sm" style="background:${assetColor(r.scheme.assetClass)}"></i>${esc(r.scheme.assetClass)} · ${esc(r.scheme.category)}${r.folios > 1 ? ` · ${r.folios} folios` : ''}</div></td>
           <td class="num">${fmtUnits(r.units)}</td>
-          <td class="num">${fmtNav(r.scheme.nav)}${r.scheme.navUsd != null ? `<div class="row-sub">US$${r.scheme.navUsd}</div>` : ''}</td>
+          <td class="num">${fmtNav(r.scheme.nav)}${r.scheme.navUsd != null ? `<div class="row-sub">US$${r.scheme.navUsd} · ${shortDate(r.scheme.navDate)}</div>` : ''}</td>
           <td class="num">${rupees(r.sum.invested)}</td>
           <td class="num">${rupees(r.sum.current)}</td>
           ${dayCell(r.sum.dayChange, r.sum.dayPct)}
@@ -445,7 +456,7 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
             if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span>${bought}<span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
             const g = st.current - st.invested;
             return `<div class="scheme">
-              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · <span class="nowrap">NAV ${fmtNav(sc.nav)}${sc.navUsd != null ? ` (US$${sc.navUsd} × ₹${sc.usdInr})` : ''}${sc.navDate ? ` on ${date(sc.navDate)}` : ''}</span>${h.txns.some((t) => t.inrEstimated) ? ' · <span class="nowrap" title="Worked out from the dollar amount at that day’s exchange rate">rupee cost estimated</span>' : ''}</small></span>
+              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · <span class="nowrap">NAV ${fmtNav(sc.nav)}${sc.navDate ? ` on ${date(sc.navDate)}` : ''}</span>${h.txns.some((t) => t.inrEstimated) ? ' · <span class="nowrap" title="Worked out from the dollar amount at that day’s exchange rate">rupee cost estimated</span>' : ''}</small>${giftNavNote(sc)}</span>
               ${bought}
               <span class="num" data-l="Units">${fmtUnits(st.units)}</span>
               <span class="num" data-l="Invested">${rupees(st.invested)}</span>

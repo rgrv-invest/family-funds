@@ -27,11 +27,14 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   (redemption NAV, from DSP's site; DSP publishes it 2–3 days late) and the daily dollar-to-rupee
   rate (ECB reference rate, via Frankfurter). DSP's site doesn't let other web pages read its data,
   so the browser can't fetch it directly. In the app these funds have scheme codes like
-  `gift:DGEQ-A` and work like any other fund: the rupee NAV is the dollar NAV × that day's rate, so
+  `gift:DGEQ-A` and work like any other fund: the rupee NAV is the dollar NAV × the rate of the
+  NAV's own date (a NAV of 17 Nov uses the 17 Nov rate; on an ECB holiday, the last rate before it), so
   value, gain, XIRR and the day's change include currency moves. They're added with "+ Add folio"
   (search "dsp global"): the form asks for the dollar amount and, optionally, the rupees that left
   the bank; left blank, the rupees are estimated from that day's rate and the folio shows "rupee
-  cost estimated". Units left blank are worked out from that day's dollar NAV.
+  cost estimated". Units left blank are worked out from that day's dollar NAV. The folio card shows
+  the dollar NAV and rate with their dates, and that the value is as of that NAV date (a few days
+  old), not today.
 - **Day's change** (summary banner, every holdings table, folio cards): the move from the previous
   NAV / close to the latest one, on the units held through it. Units bought on the latest day add
   nothing yet; units sold on it are no longer counted. The percentage is against the value at the
