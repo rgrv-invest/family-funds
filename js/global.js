@@ -57,9 +57,14 @@ export function withGlobal(schemes, g) {
   });
 }
 
-// Search the GIFT City funds by name (every word must match).
+// Search the GIFT City funds by name: every word typed must start a word of the name, ignoring
+// punctuation, so "DSP Global Equity Fund- Class A" (as on DSP's statement) finds Class A only.
+const nameWords = (s) => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 export function searchGlobal(g, q) {
-  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-  return (g?.funds || []).filter((f) => words.every((w) => `${f.name} gift city ifsc`.toLowerCase().includes(w))).map((f) => ({ code: f.code, name: f.name }));
+  const typed = nameWords(q);
+  if (!typed.length) return [];
+  return (g?.funds || []).filter((f) => {
+    const name = nameWords(`${f.name} gift city ifsc`);
+    return typed.every((w) => name.some((n) => n.startsWith(w)));
+  }).map((f) => ({ code: f.code, name: f.name }));
 }
