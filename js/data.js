@@ -5,9 +5,13 @@
 //   portfolios: { id, memberId, name }
 //   folios:     { id, folioNo, amc, holder, portfolioId }   (portfolioId null = unassigned)
 //   holdings:   { id, folioId, schemeCode, txns: [{ date, amount, units }] }  (amount < 0 = redemption)
+//               GIFT City funds (schemeCode "gift:…") also keep usd (dollars paid / received) and
+//               inrEstimated (amount worked out from that day's dollar rate, not from the bank)
 //   schemes:    { code, name, amc, assetClass, category, nav, navDate }
 //   demats:     { id, broker, dpId, clientId, holderName, memberId }
 //   shares:     { id, isin, dematId, portfolioId, txns: [{ date, qty, price, kind }], dividends, sectorOverride }
+
+import { isGlobal, globalScheme, withGlobal, searchGlobal, navOnGlobal } from './global.js';
 
 const NAV_DATE = '2026-10-01';
 
@@ -39,6 +43,12 @@ const SAMPLE_PRICES = {
     INE007A01025: [4389.6, 'CRISIL', 'CRISIL LTD'],
     INE00LO01017: [10493.0, 'CRAFTSMAN', 'CRAFTSMAN AUTOMATION LTD'],
   },
+};
+// GIFT City fund NAVs (US dollars) and the dollar rate, in the shape of data/global-funds.json.
+const SAMPLE_GLOBAL = {
+  funds: [{ code: 'gift:DGEQ-A', name: 'DSP Global Equity Fund – Class A (Regular)', amc: 'DSP (GIFT City)', currency: 'USD', assetClass: 'Equity', category: 'Global',
+    navs: [['2025-09-22', 10.001], ['2025-10-06', 10.02], ['2026-03-31', 9.81], ['2026-09-30', 9.62], ['2026-10-01', 9.71]] }],
+  usdInr: [['2025-09-22', 88.31], ['2025-10-06', 88.72], ['2026-03-31', 91.2], ['2026-09-30', 92.84], ['2026-10-01', 92.91]],
 };
 const SAMPLE_META = {
   capPeriod: '2025-12-31', sectorSource: 'Nifty 500 list (NSE)',
@@ -129,6 +139,8 @@ function sampleState() {
   add('Sister', 'p7', 'UTI', '61002931', [['120716', sip('120716', '2023-06-07', 40, 3000)]]);
   add('Sister', 'p7', 'HDFC', '1088231/05', [['119062', lump('119062', '2024-05-02', 100000)]]);
   add('Sister', null, 'Axis', '910445566', [['119551', lump('119551', '2024-01-15', 46000)]]);
+  // A GIFT City fund bought in dollars; the rupee cost is estimated from that day's rate.
+  add('Me', 'p4', 'DSP (GIFT City)', 'IFSC-100245', [['gift:DGEQ-A', [{ date: '2025-10-06', units: 598.802, amount: 532320, usd: 6000, inrEstimated: true }]]]);
 
   // one partial redemption so the sample isn't all buys
   const h = holdings.find((x) => x.schemeCode === '119062' && x.txns.length === 1 && x.txns[0].amount === 500000);
@@ -151,7 +163,8 @@ function sampleState() {
     sh('s5', 'INE006I01046', 'd2', 'p4', [{ date: '2023-05-02', qty: 25, price: 1400, kind: 'opening' }]),
     sh('s6', 'INE002S01010', 'd2', null, [{ date: '2026-09-15', qty: 30, price: 1080, kind: 'buy' }]), // unassigned, under a year
   ];
-  return { members, portfolios, folios, holdings, schemes: SCHEMES, navDate: NAV_DATE, demats, shares, prices: SAMPLE_PRICES, stockMeta: SAMPLE_META, users: [{ id: 'mom@example.com', role: 'editor' }, { id: 'sister@example.com', role: 'viewer' }] };
+  const schemes = withGlobal([...SCHEMES, globalScheme(SAMPLE_GLOBAL, 'gift:DGEQ-A')], SAMPLE_GLOBAL);
+  return { members, portfolios, folios, holdings, schemes, global: SAMPLE_GLOBAL, navDate: NAV_DATE, demats, shares, prices: SAMPLE_PRICES, stockMeta: SAMPLE_META, users: [{ id: 'mom@example.com', role: 'editor' }, { id: 'sister@example.com', role: 'viewer' }] };
 }
 
 // ---------- store ----------
@@ -231,10 +244,15 @@ export const sampleStore = {
   // Scheme search/lookup against the sample list (the live app uses mfapi.in).
   searchSchemes: async (q) => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return SCHEMES.filter((s) => words.every((w) => s.name.toLowerCase().includes(w))).map((s) => ({ code: s.code, name: s.name }));
+    return [...searchGlobal(SAMPLE_GLOBAL, q), ...SCHEMES.filter((s) => words.every((w) => s.name.toLowerCase().includes(w))).map((s) => ({ code: s.code, name: s.name }))];
   },
-  ensureScheme: async (code) => SCHEMES.find((s) => s.code === code),
-  navOn: async (code, day) => ({ nav: navOn(SCHEMES.find((s) => s.code === code), day), date: day }),
+  ensureScheme: async (code) => {
+    const have = state.schemes.find((s) => s.code === code);
+    if (have || !isGlobal(code)) return have || SCHEMES.find((s) => s.code === code);
+    commit({ schemes: withGlobal([...state.schemes, globalScheme(SAMPLE_GLOBAL, code)], SAMPLE_GLOBAL) });
+    return state.schemes.find((s) => s.code === code);
+  },
+  navOn: async (code, day) => (isGlobal(code) ? navOnGlobal(SAMPLE_GLOBAL, code, day) : { nav: navOn(SCHEMES.find((s) => s.code === code), day), date: day }),
   deleteMember(memberId) {
     commit({ members: state.members.filter((m) => m.id !== memberId) });
   },
@@ -283,9 +301,9 @@ export const sampleStore = {
     }
     commit({ folios, holdings });
   },
-  addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units }) {
+  addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units, txn }) {
     const f = { id: id('f'), folioNo, amc, holder, portfolioId };
-    const h = { id: id('h'), folioId: f.id, schemeCode, txns: [{ date, amount, units }] };
+    const h = { id: id('h'), folioId: f.id, schemeCode, txns: [txn || { date, amount, units }] };
     commit({ folios: [...state.folios, f], holdings: [...state.holdings, h] });
     return f;
   },

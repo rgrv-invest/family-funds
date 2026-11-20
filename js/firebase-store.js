@@ -4,6 +4,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { fetchScheme, searchSchemes, navOn, schemeCodeForIsin, needsNav } from './mf.js';
 import { loadSharePrices } from './prices.js';
+import { isGlobal, globalScheme, withGlobal, searchGlobal, navOnGlobal } from './global.js';
 
 const COLS = ['members', 'portfolios', 'folios', 'holdings', 'schemes', 'demats', 'shares'];
 // Share collections added later: until firestore.rules allows them, treat them as empty
@@ -13,7 +14,7 @@ const byOrder = (a, b) => (a.order || 0) - (b.order || 0) || String(a.name || a.
 
 export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   const data = { members: [], portfolios: [], folios: [], holdings: [], schemes: [], demats: [], shares: [], users: [] };
-  let prices = null, stockMeta = null;
+  let prices = null, stockMeta = null, global = null;
   const blocked = new Set(); // share collections the current rules refuse
   const loaded = new Set();
   let state = null;
@@ -22,17 +23,19 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
 
   const rebuild = () => {
     if (loaded.size < COLS.length) return;
-    const navDate = data.schemes.reduce((m, s) => (s.navDate > m ? s.navDate : m), '');
+    const schemes = withGlobal(data.schemes, global);
+    const navDate = schemes.reduce((m, s) => (s.navDate > m ? s.navDate : m), '');
     state = {
       members: [...data.members].sort(byOrder),
       portfolios: [...data.portfolios].sort(byOrder),
       folios: [...data.folios].sort(byOrder),
       holdings: data.holdings,
-      schemes: data.schemes,
+      schemes,
       demats: [...data.demats].sort(byOrder),
       shares: [...data.shares].sort(byOrder),
       prices,
       stockMeta,
+      global,
       sharesBlocked: blocked.size > 0,
       users: [...data.users].sort((a, b) => a.id.localeCompare(b.id)),
       navDate: navDate || new Date().toISOString().slice(0, 10),
@@ -68,6 +71,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     const got = await loadSharePrices();
     if (got.prices) prices = got.prices;
     if (got.meta) stockMeta = got.meta;
+    if (got.global) global = got.global;
     if (state) rebuild();
   }
   refreshPrices();
@@ -90,7 +94,7 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     if (refreshing) return;
     refreshing = true;
     const now = Date.now();
-    const stale = data.schemes.filter((s) => needsNav(s, now));
+    const stale = data.schemes.filter((s) => !isGlobal(s.code) && needsNav(s, now)); // GIFT City funds: from the site's file
     await Promise.all(stale.map(async (s) => {
       try {
         const fresh = await fetchScheme(s.code);
@@ -109,7 +113,9 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   async function ensureScheme(code) {
     const have = data.schemes.find((s) => s.code === code);
     if (have) return have;
-    const s = await fetchScheme(code);
+    if (isGlobal(code) && !global) await refreshPrices();
+    const s = isGlobal(code) ? globalScheme(global, code) : await fetchScheme(code);
+    if (!s) throw new Error('That GIFT City fund isn’t in the NAV file yet. Try again later.');
     await setDoc(doc(db, 'schemes', code), { ...s, checkedOn: new Date().toISOString() });
     return s;
   }
@@ -117,9 +123,13 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
   return {
     get: () => state,
     subscribe(fn) { listeners.add(fn); if (state) fn(state); return () => listeners.delete(fn); },
-    searchSchemes,
+    // GIFT City funds (from the site's file) first, then mfapi.in.
+    async searchSchemes(q) {
+      const gift = searchGlobal(global, q);
+      try { return [...gift, ...(await searchSchemes(q))]; } catch (e) { if (gift.length) return gift; throw e; }
+    },
     ensureScheme,
-    navOn,
+    navOn: async (code, day) => (isGlobal(code) ? navOnGlobal(global, code, day) : navOn(code, day)),
     schemeCodeForIsin: async (isin, name) => data.schemes.find((s) => s.isin === isin)?.code || schemeCodeForIsin(isin, name),
 
     addMember(name) {
@@ -145,12 +155,12 @@ export function createStore(db, { canEdit, isAdmin, onError, onDenied }) {
     },
 
     moveFolio: (id, portfolioId, holder) => save(updateDoc(doc(db, 'folios', id), holder ? { portfolioId, holder } : { portfolioId })),
-    async addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units }) {
+    async addFolio({ folioNo, amc, holder, portfolioId, schemeCode, date, amount, units, txn }) {
       await ensureScheme(schemeCode);
       const fid = newId('folios');
       const b = writeBatch(db);
       b.set(doc(db, 'folios', fid), { folioNo, amc, holder, portfolioId, order: Date.now() });
-      b.set(doc(db, 'holdings', newId('holdings')), { folioId: fid, schemeCode, txns: [{ date, amount, units }] });
+      b.set(doc(db, 'holdings', newId('holdings')), { folioId: fid, schemeCode, txns: [txn || { date, amount, units }] });
       await b.commit();
       return { id: fid };
     },

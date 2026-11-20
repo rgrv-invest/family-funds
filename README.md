@@ -21,6 +21,20 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
   publishes in the evening, IST) the app re-checks it at most every 3 hours: on load, when the
   tab comes back into view, and every hour while open. Whoever has the app open does it. Each
   refresh also saves the NAV before the latest one (`prevNav`, `prevNavDate`) for the day's change.
+- **GIFT City funds** (e.g. DSP Global Equity Fund): priced in US dollars and not in AMFI's data.
+  A GitHub Action (`.github/workflows/global-funds.yml`, every day at 9:05 am and 9:05 pm IST, or
+  by hand) saves `data/global-funds.json`: each DSP GIFT City share class's NAV history in dollars
+  (redemption NAV, from DSP's site; DSP publishes it 2–3 days late) and the daily dollar-to-rupee
+  rate (ECB reference rate, via Frankfurter). DSP's site doesn't let other web pages read its data,
+  so the browser can't fetch it directly. In the app these funds have scheme codes like
+  `gift:DGEQ-A` and work like any other fund: the rupee NAV is the dollar NAV × the rate of the
+  NAV's own date (a NAV of 17 Nov uses the 17 Nov rate; on an ECB holiday, the last rate before it), so
+  value, gain, XIRR and the day's change include currency moves. They're added with "+ Add folio"
+  (search "dsp global"): the form asks for the dollar amount and, optionally, the rupees that left
+  the bank; left blank, the rupees are estimated from that day's rate and the folio shows "rupee
+  cost estimated". Units left blank are worked out from that day's dollar NAV. The folio card shows
+  the dollar NAV and rate with their dates, and that the value is as of that NAV date (a few days
+  old), not today.
 - **Day's change** (summary banner, every holdings table, folio cards): the move from the previous
   NAV / close to the latest one, on the units held through it. Units bought on the latest day add
   nothing yet; units sold on it are no longer counted. The percentage is against the value at the
@@ -115,10 +129,11 @@ Live app: GitHub Pages (`https://<user>.github.io/family-funds/`)
 | `js/cas-demat.js` | NSDL / CDSL CAS parser → demat accounts and shares; import matching |
 | `js/xlsx.js` | Reads .xlsx files in the browser, including password-protected ones |
 | `js/axis.js` | Axis Direct holding statement + transaction report → shares; import matching |
-| `js/prices.js` | Loads `data/prices.json` and `data/stock-meta.json` from the site |
-| `scripts/share_prices.py`, `scripts/stock_meta.py` | The two GitHub Action jobs (standard-library Python) |
-| `.github/workflows/` | `share-prices.yml` (daily), `stock-meta.yml` (weekly / on upload) |
-| `data/` | `prices.json`, `stock-meta.json` (written by the jobs), `include-isins.txt`, `amfi/` (manual AMFI uploads) |
+| `js/prices.js` | Loads `data/prices.json`, `data/stock-meta.json` and `data/global-funds.json` from the site |
+| `js/global.js` | GIFT City (dollar) funds: rupee NAVs from `data/global-funds.json`, search, lookups by date |
+| `scripts/share_prices.py`, `scripts/stock_meta.py`, `scripts/global_funds.py` | The GitHub Action jobs (standard-library Python) |
+| `.github/workflows/` | `share-prices.yml` (twice a day), `global-funds.yml` (twice a day), `stock-meta.yml` (weekly / on upload) |
+| `data/` | `prices.json`, `stock-meta.json`, `global-funds.json` (written by the jobs), `include-isins.txt`, `amfi/` (manual AMFI uploads) |
 | `tests/` | `node --test tests/*.test.mjs`: share maths, statement and Axis import matching |
 | `js/format.js` | Indian number/date formatting |
 | `js/data.js`, `js/preview-main.js` | Sample-data store for the offline preview |
@@ -132,7 +147,9 @@ members/{id}     { name, order }
 portfolios/{id}  { memberId, name, order }
 folios/{id}      { folioNo, amc, holder, portfolioId|null, order }   // holder shown = the portfolio's member; saved on move, kept when unassigned
 holdings/{id}    { folioId, schemeCode, txns: [{ date: 'YYYY-MM-DD', amount, units }] }   // redemptions: negative amount & units
-schemes/{code}   { code, name, amc, assetClass, category, amfiCategory, isin, nav, navDate, checkedOn }
+                 // GIFT City funds' txns also have usd (dollars) and inrEstimated (amount from that day's rate)
+schemes/{code}   { code, name, amc, assetClass, category, amfiCategory, isin, nav, navDate, prevNav, prevNavDate, checkedOn }
+                 // "gift:…" codes: { code, name, amc, assetClass, category, currency }; NAVs come from data/global-funds.json
 demats/{id}      { broker, dpId, clientId, brokerClientId|null, holderName, memberId|null, order }   // Axis accounts: brokerClientId
 shares/{id}      { isin, name, dematId, portfolioId|null, order, sectorOverride|null,   // name: as in the import, if the price file lacks it
                    txns: [{ date|null, qty, price|null, kind }],   // kind: buy | sell | bonus | split | opening; sells: negative qty
@@ -192,6 +209,23 @@ nothing to do. If, by mid-February or mid-August, the app still lists shares by 
    and its summary should say "Market cap: … six months to <new date>".
 6. If it says "kept previous list", the file wasn't newer or wasn't AMFI's list; check you
    downloaded the right file.
+
+## Adding a DSP GIFT City fund (DSP Global Equity Fund)
+
+These funds aren't in the CAMS / KFintech statement, so they're added by hand, once per purchase.
+
+1. Find your DSP IFSC account (folio) number and, for each purchase: the date, the dollars invested
+   and the units allotted (all on DSP's confirmation email or statement). If you have it, also note
+   the rupees that left your bank for that purchase (bank statement).
+2. In Family Funds, open the portfolio it belongs in → **+ Add folio**.
+3. **Folio number:** the DSP IFSC folio number. **Scheme:** type `dsp global` and pick the right class
+   (**Class A (Regular)** or **Class B (Direct)**, as on your statement).
+4. **Date**, **Amount (US$)**, and **Units**. Fill in **Amount (₹) from your bank** if you have it;
+   otherwise leave it blank and it's estimated from that day's dollar rate.
+5. **Add folio.** Each later purchase: **+ Transaction** on that folio, same fields.
+
+The fund then shows in rupees (dollar NAV × that day's rate) in all totals, XIRR and the day's
+change. Its NAV is updated by the "GIFT City fund NAVs" job; DSP publishes it 2–3 days late.
 
 ## Getting your NSDL / CDSL statement (forward this to family members)
 
