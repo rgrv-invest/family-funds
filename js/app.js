@@ -5,6 +5,7 @@ import {
 import {
   rupees, compact, pct, signedPct, signedRupees, tone, date, shortDate, esc, fmtNav, fmtUnits,
 } from './format.js';
+import { isGlobal, navUsdOn, usdInrOn } from './global.js';
 import { readCas, normFolio, txnKey } from './cas.js';
 import { readDematCas, planDematImport, dematWrites } from './cas-demat.js';
 import { readAxisFile, planAxisImport, axisWrites } from './axis.js';
@@ -320,7 +321,7 @@ function holdingsTable(s, holdings, total, title = 'Holdings') {
           <td><div class="row-title">${esc(r.scheme.name)}</div>
             <div class="row-sub"><i class="swatch-sm" style="background:${assetColor(r.scheme.assetClass)}"></i>${esc(r.scheme.assetClass)} · ${esc(r.scheme.category)}${r.folios > 1 ? ` · ${r.folios} folios` : ''}</div></td>
           <td class="num">${fmtUnits(r.units)}</td>
-          <td class="num">${fmtNav(r.scheme.nav)}</td>
+          <td class="num">${fmtNav(r.scheme.nav)}${r.scheme.navUsd != null ? `<div class="row-sub">US$${r.scheme.navUsd}</div>` : ''}</td>
           <td class="num">${rupees(r.sum.invested)}</td>
           <td class="num">${rupees(r.sum.current)}</td>
           ${dayCell(r.sum.dayChange, r.sum.dayPct)}
@@ -444,7 +445,7 @@ function folioCards(s, folios, { showPortfolio = false, closed = 0 } = {}) {
             if (st.units <= 1e-6) return `<div class="scheme sold"><span class="sn">${esc(sc.name)}<small>Fully redeemed${st.lastSale ? ` on ${date(st.lastSale)}` : ''}</small></span>${bought}<span class="num">—</span><span class="num">—</span><span class="num">—</span><span class="num">—</span></div>`;
             const g = st.current - st.invested;
             return `<div class="scheme">
-              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · <span class="nowrap">NAV ${fmtNav(sc.nav)}${sc.navDate ? ` on ${date(sc.navDate)}` : ''}</span></small></span>
+              <span class="sn">${esc(sc.name)}<small>${esc(sc.category)} · <span class="nowrap">NAV ${fmtNav(sc.nav)}${sc.navUsd != null ? ` (US$${sc.navUsd} × ₹${sc.usdInr})` : ''}${sc.navDate ? ` on ${date(sc.navDate)}` : ''}</span>${h.txns.some((t) => t.inrEstimated) ? ' · <span class="nowrap" title="Worked out from the dollar amount at that day’s exchange rate">rupee cost estimated</span>' : ''}</small></span>
               ${bought}
               <span class="num" data-l="Units">${fmtUnits(st.units)}</span>
               <span class="num" data-l="Invested">${rupees(st.invested)}</span>
@@ -746,7 +747,7 @@ function nameDialog(title, current, onSave) {
 // Search box that looks up schemes (mfapi.in) and writes the chosen code into a hidden input.
 const schemePickerHtml = (label = 'Scheme') => `
   <div class="field">${label}
-    <input type="search" class="scheme-q" placeholder="Type 3+ letters, e.g. parag parikh flexi direct" autocomplete="off" required>
+    <input type="search" class="scheme-q" placeholder="Type 3+ letters, e.g. parag parikh flexi direct, or dsp global equity" autocomplete="off" required>
     <input type="hidden" name="schemeCode">
     <div class="picker" role="listbox" hidden></div>
   </div>`;
@@ -787,13 +788,51 @@ function wireSchemePicker(form, onPick) {
 }
 
 // Fields for one transaction. Units can be left blank and estimated from that day's NAV.
+// GIFT City funds are bought in dollars: the dollar amount is asked for, and the rupee amount is
+// optional (left blank, it's estimated from that day's dollar rate). setTxnCurrency switches them.
 const txnFieldsHtml = (s, withType = false) => `
   ${withType ? `<label class="field">Type<select name="type"><option value="buy">Purchase / SIP instalment</option><option value="sell">Redemption</option></select></label>` : ''}
   <div class="row-2">
     <label class="field">Date<input type="date" name="date" required max="${new Date().toISOString().slice(0, 10)}"></label>
-    <label class="field">Amount (₹)<input type="number" name="amount" required min="1" step="any"></label>
+    <label class="field usd-field" hidden>Amount (US$)<input type="number" name="usd" min="0.01" step="any"></label>
+    <label class="field inr-field"><span class="inr-label">Amount (₹)</span><input type="number" name="amount" required min="1" step="any"></label>
   </div>
+  <p class="hint usd-field" hidden style="margin:0">Dollar fund (GIFT City): enter the dollars, and the rupees that left your bank if you have them. Left blank, the rupees are estimated from that day’s dollar rate and marked “estimated”.</p>
   <label class="field">Units<input type="number" name="units" min="0.001" step="any" placeholder="Leave blank to estimate from that day’s NAV"></label>`;
+function setTxnCurrency(form, code) {
+  const usd = isGlobal(code);
+  form.querySelectorAll('.usd-field').forEach((el) => { el.hidden = !usd; });
+  form.querySelector('[name=usd]').required = usd;
+  const inr = form.querySelector('[name=amount]');
+  inr.required = !usd;
+  inr.placeholder = usd ? 'Optional' : '';
+  form.querySelector('.inr-label').textContent = usd ? 'Amount (₹) from your bank' : 'Amount (₹)';
+}
+// One transaction from the form: { date, amount, units } (+ usd, inrEstimated for GIFT City funds).
+async function resolveTxn(d) {
+  const sign = d.type === 'sell' ? -1 : 1;
+  if (!isGlobal(d.schemeCode)) {
+    const units = await resolveUnits(d);
+    return { date: d.date, amount: sign * +d.amount, units: sign * units };
+  }
+  const g = store.get().global;
+  const usd = +d.usd;
+  if (!(usd > 0)) throw new Error('Enter the amount in dollars.');
+  let units = +d.units;
+  if (!units) {
+    const n = navUsdOn(g, d.schemeCode, d.date);
+    if (!n) throw new Error('Couldn’t find a NAV for that date. Please enter the units from your statement.');
+    units = +(usd / n.nav).toFixed(3);
+  }
+  let amount = +d.amount, inrEstimated = false;
+  if (!amount) {
+    const fx = usdInrOn(g, d.date);
+    if (!fx) throw new Error('No dollar rate for that date. Please enter the rupee amount from your bank statement.');
+    amount = Math.round(usd * fx);
+    inrEstimated = true;
+  }
+  return { date: d.date, amount: sign * amount, units: sign * units, usd: sign * usd, inrEstimated };
+}
 
 async function resolveUnits(d) {
   if (d.units) return +d.units;
@@ -826,13 +865,16 @@ function addFolioDialog(portfolioId) {
       <div class="field-note">First purchase</div>
       ${txnFieldsHtml(s)}
       <p class="hint" style="margin:0">Add more purchases later with “+ Transaction” on the folio.</p>`,
-    onOpen: (form) => wireSchemePicker(form),
+    onOpen: (form) => {
+      wireSchemePicker(form, (code) => setTxnCurrency(form, code));
+      form.querySelector('.scheme-q').addEventListener('input', () => setTxnCurrency(form, ''));
+    },
     onSubmit: async (d) => {
       if (!d.folioNo.trim()) return 'Enter a folio number.';
       if (!d.schemeCode) return 'Pick a scheme from the search results.';
-      const units = await resolveUnits(d);
+      const txn = await resolveTxn(d);
       const sc = await store.ensureScheme(d.schemeCode);
-      await store.addFolio({ folioNo: d.folioNo.trim(), amc: sc.amc, holder: d.holder, portfolioId: d.portfolioId || null, schemeCode: d.schemeCode, date: d.date, amount: +d.amount, units });
+      await store.addFolio({ folioNo: d.folioNo.trim(), amc: sc.amc, holder: d.holder, portfolioId: d.portfolioId || null, schemeCode: d.schemeCode, ...txn, txn });
       toast(`Added folio ${d.folioNo.trim()}`);
     },
   });
@@ -850,20 +892,20 @@ function addTxnDialog(folioId) {
       <div class="other-scheme" ${held.length ? 'hidden' : ''}>${schemePickerHtml('Find scheme')}</div>
       ${txnFieldsHtml(s, true)}`,
     onOpen: (form) => {
-      wireSchemePicker(form);
       const sel = form.querySelector('[name=existing]');
       const other = form.querySelector('.other-scheme');
       const q = form.querySelector('.scheme-q');
-      const sync = () => { other.hidden = !!sel.value; q.required = !sel.value; if (sel.value) q.setCustomValidity(''); };
+      wireSchemePicker(form, (code) => setTxnCurrency(form, code));
+      q.addEventListener('input', () => setTxnCurrency(form, ''));
+      const sync = () => { other.hidden = !!sel.value; q.required = !sel.value; if (sel.value) q.setCustomValidity(''); setTxnCurrency(form, sel.value); };
       sel.addEventListener('change', sync);
       sync();
     },
     onSubmit: async (d) => {
       d.schemeCode = d.existing || d.schemeCode;
       if (!d.schemeCode) return 'Pick a scheme.';
-      const units = await resolveUnits(d);
-      const sign = d.type === 'sell' ? -1 : 1;
-      await store.addTransaction(folioId, d.schemeCode, { date: d.date, amount: sign * +d.amount, units: sign * units });
+      const txn = await resolveTxn(d);
+      await store.addTransaction(folioId, d.schemeCode, txn);
       toast(d.type === 'sell' ? 'Redemption added' : 'Purchase added');
     },
   });

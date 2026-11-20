@@ -1,0 +1,57 @@
+# GIFT City fund NAVs (DSP, in US dollars) and the dollar-to-rupee rate into data/global-funds.json.
+# Runs every day at 9:05 am and 9:05 pm IST (just after the share price job), or by hand.
+# On a pull request that changes the script it only checks the downloads work (nothing is committed).
+name: GIFT City fund NAVs
+
+on:
+  schedule:
+    - cron: '35 3 * * *'    # 09:05 IST, every day
+    - cron: '35 15 * * *'   # 21:05 IST, every day
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/global_funds.py
+      - .github/workflows/global-funds.yml
+
+permissions:
+  contents: write   # commit data/global-funds.json
+  pages: write      # ask GitHub Pages to republish the site
+
+concurrency:
+  group: global-funds
+  cancel-in-progress: false
+
+jobs:
+  navs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the downloads (pull request, nothing saved)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/global_funds.py --dry-run
+
+      - name: Download NAVs and exchange rates
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/global_funds.py
+
+      - name: Save if changed
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add data/global-funds.json
+          if git diff --cached --quiet; then
+            echo "No change; nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "GIFT City fund NAVs"
+          git pull --rebase --quiet
+          git push
+          # Commits made by this workflow may not trigger a GitHub Pages rebuild on their own.
+          gh api --method POST "repos/${{ github.repository }}/pages/builds" > /dev/null \
+            && echo "Requested a GitHub Pages rebuild." \
+            || echo "Could not request a Pages rebuild (the site will update on the next push)."
